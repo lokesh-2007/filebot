@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import hashlib
+import os
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -134,20 +135,30 @@ class Database:
 
     def enqueue_dirty(self, path: str | Path, operation: DirtyOperation) -> None:
         """Insert or replace a debounced filesystem change in ``dirty_queue``."""
-        if operation not in ("upsert", "delete"):
-            raise ValueError(f"Unsupported dirty operation: {operation!r}")
-        normalized = str(Path(path).expanduser().resolve())
+        self.enqueue_dirty_many([(path, operation)])
+
+    def enqueue_dirty_many(self, events: list[tuple[str | Path, DirtyOperation]]) -> None:
+        """Atomically insert a bounded batch of filesystem changes."""
+        if not events:
+            return
+        normalized: list[tuple[str, DirtyOperation, float]] = []
+        for path, operation in events:
+            if operation not in ("upsert", "delete"):
+                raise ValueError(f"Unsupported dirty operation: {operation!r}")
+            normalized.append((str(Path(path).expanduser().resolve()), operation,
+                               datetime.now(timezone.utc).timestamp()))
         try:
             with self.connect() as connection:
-                connection.execute(
+                connection.executemany(
                     """INSERT INTO dirty_queue(path, event_type, queued_at, attempts, last_error)
                        VALUES (?, ?, ?, 0, NULL)
                        ON CONFLICT(path) DO UPDATE SET event_type=excluded.event_type,
-                           queued_at=excluded.queued_at, attempts=0, last_error=NULL""",
-                    (normalized, operation, datetime.now(timezone.utc).timestamp()),
+                           queued_at=MAX(excluded.queued_at, dirty_queue.queued_at + 0.000001),
+                           attempts=0, last_error=NULL""",
+                    normalized,
                 )
         except sqlite3.Error as exc:
-            raise RuntimeError(f"Could not queue {operation} for {normalized}: {exc}") from exc
+            raise RuntimeError(f"Could not queue filesystem event batch: {exc}") from exc
 
     def pending_dirty(self, limit: int = 100) -> list[sqlite3.Row]:
         """Return oldest queued filesystem changes without removing them."""
@@ -162,24 +173,35 @@ class Database:
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not read dirty queue: {exc}") from exc
 
-    def remove_dirty(self, path: str | Path) -> None:
-        """Remove a successfully processed path from ``dirty_queue``."""
+    def remove_dirty(self, path: str | Path, queued_at: float | None = None) -> None:
+        """Acknowledge an event, optionally only if it is still the same revision."""
         normalized = str(Path(path).expanduser().resolve())
         try:
             with self.connect() as connection:
-                connection.execute("DELETE FROM dirty_queue WHERE path = ?", (normalized,))
+                if queued_at is None:
+                    connection.execute("DELETE FROM dirty_queue WHERE path = ?", (normalized,))
+                else:
+                    connection.execute("DELETE FROM dirty_queue WHERE path = ? AND queued_at = ?",
+                                       (normalized, queued_at))
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not remove queued path {normalized}: {exc}") from exc
 
-    def record_dirty_error(self, path: str | Path, error: str) -> None:
-        """Record a processing failure while retaining the item for retry."""
+    def record_dirty_error(self, path: str | Path, error: str, queued_at: float | None = None) -> None:
+        """Record a processing failure without changing a newer queued revision."""
         normalized = str(Path(path).expanduser().resolve())
         try:
             with self.connect() as connection:
-                connection.execute(
-                    "UPDATE dirty_queue SET attempts = attempts + 1, last_error = ? WHERE path = ?",
-                    (error[:2000], normalized),
-                )
+                if queued_at is None:
+                    connection.execute(
+                        "UPDATE dirty_queue SET attempts = attempts + 1, last_error = ? WHERE path = ?",
+                        (error[:2000], normalized),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE dirty_queue SET attempts = attempts + 1, last_error = ? "
+                        "WHERE path = ? AND queued_at = ?",
+                        (error[:2000], normalized, queued_at),
+                    )
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not record queue error for {normalized}: {exc}") from exc
 
@@ -187,6 +209,20 @@ class Database:
         """Return indexed file metadata for a normalized path."""
         with self.connect() as connection:
             return connection.execute("SELECT * FROM files WHERE path=?", (str(Path(path).resolve()),)).fetchone()
+
+    def paths_under(self, directory: str | Path) -> list[str]:
+        """List indexed and queued file paths beneath a directory."""
+        root = str(Path(directory).expanduser().resolve()).rstrip("\\/") + os.sep
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    "SELECT path FROM files WHERE substr(path, 1, ?) COLLATE NOCASE = ? "
+                    "UNION SELECT path FROM dirty_queue WHERE substr(path, 1, ?) COLLATE NOCASE = ?",
+                    (len(root), root, len(root), root),
+                )
+                return [str(row[0]) for row in rows]
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not list indexed paths beneath {directory}: {exc}") from exc
 
     def replace_file(self, path: str | Path, *, content_hash: str, size: int, mtime: float,
                      chunks: list[dict[str, object]]) -> int:
@@ -272,3 +308,4 @@ class Database:
             connection.execute("""UPDATE cmd_audit SET status=?,exit_code=?,stdout_tail=?,stderr_tail=?,executed_at=strftime('%s','now')
                 WHERE proposal_id=? AND status='approved' AND executed_at IS NOT NULL""",
                 ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))
+

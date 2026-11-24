@@ -1,5 +1,5 @@
-# Default-deny policy. Read-only commands may be run directly; gated commands
-# require a visible proposal and explicit approval in FileBot's UI.
+# Default-deny policy. Read-only and gated commands both require a visible
+# proposal and explicit approval in FileBot's UI before execution.
 version: 1
 default: blocked
 read_only:
@@ -21,8 +21,9 @@ gated:
   - '^\s*del(?:ete)?(?:\.exe)?\s+.+$'
 blocked:
   # Explicit blocks take precedence over the allowlists. These patterns guard
-  # shell chaining/redirection, installers, privilege changes and disk tools.
+  # shell chaining, variable expansion, installers, privilege changes and disk tools.
   - '[&|<>]'
+  - '[%!]'
   - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip)\b'
   - '^\s*(?:del|erase|rmdir|rd)(?:\.exe)?\s+.*(?:/s|/q|/f)'
 

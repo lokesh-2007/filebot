@@ -173,3 +173,17 @@ class PopoverCard(QWidget):
             self.answer.setPlainText(f"Exit code: {code}\n{stdout}\n{stderr}".strip())
         self._refresh_pending()
         self.work_finished.emit()
+
+    def stop_tasks(self) -> None:
+        """Cancel active model work and wait for approved commands to be audited."""
+        if self._task is not None and self._task.isRunning():
+            while self._task.isRunning():
+                cancel = getattr(self.runtime, "cancel_pending", None)
+                if callable(cancel):
+                    cancel()
+                self._task.wait(100)
+        if self._command_task is not None and self._command_task.isRunning():
+            # CommandRunner has a bounded subprocess timeout; wait so its audit
+            # record is finalized before the runtime and database are released.
+            self._command_task.wait()
+

@@ -46,11 +46,13 @@ class LifecycleManager(QObject):
     """Own active resources and keep the avatar responsive during model work."""
     popover_ready = pyqtSignal(object)
     status_changed = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
 
     def __init__(self, settings: dict[str, Any], db: Database, project_root: Path) -> None:
         super().__init__()
         self.settings, self.db, self.project_root = settings, db, project_root
         self.engine = self.runtime = self.popover = None
+        self._index_service = None
         self._active = False
         self._waking = False
         self._cancel_wake = False
@@ -92,6 +94,7 @@ class LifecycleManager(QObject):
         self._waking = False
         if error:
             self.status_changed.emit("sleep")
+            self.error_occurred.emit(error)
             return
         if self._cancel_wake or self._shutting_down:
             for item in (runtime, engine):
@@ -113,6 +116,14 @@ class LifecycleManager(QObject):
         self.popover.status_changed.connect(self.set_status)
         self.popover_ready.emit(self.popover)
         self.popover.show()
+        from retrieval.index_worker import IndexQueueService
+        index_config = self.settings["index"]
+        self._index_service = IndexQueueService(
+            runtime.indexer,
+            batch_size=int(index_config.get("background_batch_size", 10)),
+            poll_seconds=float(index_config.get("background_poll_seconds", 1.0)),
+        )
+        self._index_service.start()
         self.touch()
 
     def _on_wake_finished(self) -> None:
@@ -148,6 +159,12 @@ class LifecycleManager(QObject):
         self._finish_sleep()
 
     def _finish_sleep(self) -> None:
+        if self._index_service is not None:
+            try:
+                self._index_service.stop()
+            except Exception:
+                log.exception("Error while stopping the background index service")
+            self._index_service = None
         for item in (self.runtime, self.engine):
             if item is not None:
                 try:
@@ -163,6 +180,8 @@ class LifecycleManager(QObject):
     def shutdown(self) -> None:
         self._shutting_down = True
         self.idle.stop()
+        if self.popover is not None:
+            self.popover.stop_tasks()
         if self._wake_worker is not None and self._wake_worker.isRunning():
             self._cancel_wake = True
             self._wake_worker.wait()
@@ -175,3 +194,4 @@ class LifecycleManager(QObject):
             self._wake_worker = None
         self._busy = False
         self._finish_sleep()
+

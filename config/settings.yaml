@@ -20,6 +20,8 @@ index:
   chunk_chars: 1200
   chunk_overlap: 150
   debounce_seconds: 1.0
+  background_batch_size: 10
+  background_poll_seconds: 1.0
 
 models:
   ollama:

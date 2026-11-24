@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 import json
 import logging
 import threading
@@ -34,6 +35,8 @@ class BotRuntime:
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._loop_started = threading.Event()
+        self._future_lock = threading.Lock()
+        self._active_future: Future[Any] | None = None
 
     def _start_async_loop(self) -> None:
         """Start one persistent event loop for Nanobot's awake lifetime."""
@@ -61,7 +64,21 @@ class BotRuntime:
         loop = self._async_loop
         if loop is None or not loop.is_running():
             raise RuntimeError("Nanobot event loop is not running")
-        return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        with self._future_lock:
+            self._active_future = future
+        try:
+            return future.result()
+        finally:
+            with self._future_lock:
+                if self._active_future is future:
+                    self._active_future = None
+
+    def cancel_pending(self) -> bool:
+        """Cancel the active Nanobot turn during an orderly app shutdown."""
+        with self._future_lock:
+            future = self._active_future
+        return bool(future is not None and not future.done() and future.cancel())
 
     def _stop_async_loop(self) -> None:
         """Stop and close Nanobot's event loop after its resources are released."""
@@ -178,8 +195,10 @@ class BotRuntime:
             hits = self.engine.search(prompt, 8)
             context = "\n\nLocal search results (cite paths; do not invent file contents):\n" + json.dumps(hits, ensure_ascii=False)
             prompt += context
-        result = self._run_async(self.bot.run(prompt, session_key=self._session, channel="filebot"))
+        # A failed HTTP request may still have loaded Ollama's model. Always
+        # request idle unload when this awake session is closed.
         self._model_used = True
+        result = self._run_async(self.bot.run(prompt, session_key=self._session, channel="filebot"))
         return str(result.content)
 
     def search(self, query: str) -> list[dict[str, Any]]:

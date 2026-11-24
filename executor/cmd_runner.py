@@ -5,19 +5,34 @@ import os
 import subprocess
 from pathlib import Path
 
+from executor.policy_engine import PolicyEngine
 from storage.db import Database
 
 
 class CommandRunner:
     """Execute one explicitly approved audit row with bounded runtime/output."""
-    def __init__(self, db: Database, timeout: int = 30) -> None:
+    def __init__(self, db: Database, timeout: int = 30,
+                 policy_path: str | Path | None = None) -> None:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         self.db, self.timeout = db, timeout
+        self.policy_path = Path(policy_path) if policy_path else Path(__file__).resolve().parents[1] / "config" / "cmd_policy.yaml"
 
     def execute(self, proposal_id: str) -> tuple[int, str, str]:
         """Run a staged row only if its database status is exactly approved."""
         row = self.db.claim_approved_command(proposal_id)
         if row is None:
             raise PermissionError("Command must have an explicit approved audit record")
+        try:
+            current_risk = PolicyEngine(self.policy_path).classify(str(row["command"]))
+        except Exception as exc:
+            message = f"Could not verify the current command policy: {exc}"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message[-4000:]
+        if current_risk == "blocked" or current_risk != row["risk_level"]:
+            message = "Command is no longer allowed by the current policy"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message
         cwd = Path(row["cwd"]).expanduser() if row["cwd"] else Path.home()
         if not cwd.is_dir():
             message = "Command working directory is not an existing directory"
@@ -36,3 +51,4 @@ class CommandRunner:
             stdout, stderr, code = "", str(exc), 127
         self.db.finish_command(proposal_id, code, stdout, stderr)
         return code, stdout[-4000:], stderr[-4000:]
+

@@ -20,7 +20,7 @@ python -m pip install -r requirements.txt
 ollama pull qwen2.5-coder:3b
 ```
 
-The FastEmbed embedding model is downloaded on the first wake into the cache directory in `config/settings.yaml`. ChromaDB data and the SQLite database are stored under `~/.filebot` by default.
+The FastEmbed embedding model is downloaded on the first wake into the cache directory in `config/settings.yaml`. ChromaDB data, the SQLite database, rotating logs, and Nanobot state are stored under `~/.filebot` by default. Configured paths support `~`, `%VARIABLE%`, and `$VARIABLE` expansion.
 
 Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, and `keep_alive`. Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
 
@@ -30,17 +30,17 @@ Start FileBot with:
 pythonw .\app.pyw
 ```
 
-For startup diagnostics, use `python .\app.pyw` from a console. `pynput` may require granting accessibility permissions or running in the signed-in user's desktop session.
+For startup diagnostics, use `python .\app.pyw` from a console. FileBot also writes rotating logs to `~/.filebot/logs/filebot.log`. Keep FileBot in the signed-in desktop session so the avatar and global hotkey can receive input.
 
 ## Search and indexing
 
-Watchdog records debounced file changes in SQLite. It does not load an embedding model. Wake-up loads retrieval resources on a background thread, and each search drains up to 100 queued file changes before querying, so large folders are handled over bounded batches. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
+Watchdog records debounced file changes in SQLite using one bounded-memory debounce thread. It does not load an embedding model. Wake-up loads retrieval resources on a background thread and starts an indexing service that processes queued updates in bounded batches while awake. Search and indexing share a lock so vector and lexical state cannot be changed during a query. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
 
 The indexer intentionally handles only extensions listed in settings. Changing the roots or extensions does not automatically remove old database records; remove the database under `~/.filebot` if you want to rebuild from scratch.
 
 ## CMD approval
 
-`config/cmd_policy.yaml` is default-deny. Explicitly blocked patterns take priority. A `read_only` match can be handled without a confirmation; `gated` commands are written to `cmd_audit` and shown in the popover. FileBot executes a gated command only after the user clicks **Approve**. **Reject** records the decision without running it. Every execution records its exit code and bounded output tails. Nanobot's general shell and filesystem tools are disabled; its registered tools are FileBot search, file open, and command proposal only.
+`config/cmd_policy.yaml` is default-deny. Explicitly blocked patterns take priority. `read_only` and `gated` proposals are written to `cmd_audit` and shown in the popover; the user must click **Approve** before either can run. **Reject** records the decision without running it. The current policy is checked again immediately before execution, and a changed or unreadable policy blocks the command. Every execution records its exit code and bounded output tails. Nanobot's general shell and filesystem tools are disabled; its registered tools are FileBot search, file open, and command proposal only.
 
 Treat policy edits as security-sensitive. Keep installer, privilege, shell chaining, redirection, and broad recursive deletion commands blocked.
 
@@ -58,4 +58,5 @@ The file index, audit log, vectors, and Nanobot workspace stay on this machine. 
 
 ## Current scope
 
-The first implementation supports the core sleep/wake shell, local indexing/retrieval, compact UI, and gated command flow. The tree-sitter package is included for a future structured source-code parser; current parsers cover text, Markdown, PDF, and DOCX. FileBot currently drains queued index work during wake rather than running a second always-on index worker.
+The current release supports the sleep/wake shell, local indexing and hybrid retrieval, compact UI, and gated command flow. Supported document formats are text, Markdown, PDF, and DOCX. Source-code-aware parsing and an installer package are not included yet.
+

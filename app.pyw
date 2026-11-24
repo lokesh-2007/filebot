@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.watcher import FileWatcher
+from filebot_config import expand_config_path, load_settings
 from storage.db import Database
 from ui.avatar_bubble import AvatarBubble
 from ui.hotkey_bridge import HotkeyBridge
@@ -19,13 +21,20 @@ def main() -> int:
     """Start the lightweight GUI, filesystem watcher, and hotkey listener."""
     root = Path(__file__).resolve().parent
     os.chdir(root)
-    try:
-        import yaml
-        settings = yaml.safe_load((root / "config" / "settings.yaml").read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(f"Cannot load FileBot settings: {exc}") from exc
-    logging.basicConfig(level=getattr(logging, settings["app"].get("log_level", "INFO"), logging.INFO))
-    db = Database(Path(settings["app"]["database_path"]).expanduser())
+    settings = load_settings(root / "config" / "settings.yaml")
+    db_path = expand_config_path(settings["app"]["database_path"])
+    log_dir = db_path.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_handler = RotatingFileHandler(log_dir / "filebot.log", maxBytes=2_000_000,
+                                      backupCount=3, encoding="utf-8")
+    handlers: list[logging.Handler] = [log_handler]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    logging.basicConfig(
+        level=getattr(logging, str(settings["app"].get("log_level", "INFO")).upper(), logging.INFO),
+        handlers=handlers, force=True,
+    )
+    db = Database(db_path)
     db.initialize()
     app = QApplication(sys.argv)
     lifecycle = LifecycleManager(settings, db, root)
@@ -36,10 +45,19 @@ def main() -> int:
     avatar.status_changed.connect(lifecycle.set_status)
     lifecycle.status_changed.connect(avatar.set_status)
     lifecycle.popover_ready.connect(avatar.show_popover)
+    lifecycle.error_occurred.connect(
+        lambda message: QMessageBox.warning(avatar, "FileBot could not wake", message)
+    )
     bridge.activated.connect(lifecycle.toggle)
-    bridge.start()
-    watcher.start()
-    avatar.show()
+    try:
+        bridge.start()
+        watcher.start()
+        avatar.show()
+    except Exception:
+        watcher.stop()
+        bridge.stop()
+        lifecycle.shutdown()
+        raise
     app.aboutToQuit.connect(watcher.stop)
     app.aboutToQuit.connect(bridge.stop)
     app.aboutToQuit.connect(lifecycle.shutdown)
@@ -49,6 +67,12 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception:
+    except Exception as exc:
         logging.exception("FileBot could not start")
+        try:
+            app = QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(None, "FileBot could not start", str(exc))
+        except Exception:
+            pass
         raise
+
