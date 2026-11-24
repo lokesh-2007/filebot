@@ -39,7 +39,7 @@ class HybridEngine:
         try:
             import bm25s
             self._bm25 = bm25s.BM25()
-            self._tokens = bm25s.tokenize(self._corpus, stopwords="en", stemmer="english")
+            self._tokens = bm25s.tokenize(self._corpus, stopwords="en")
             self._bm25.index(self._tokens)
         except Exception:
             log.exception("BM25 index unavailable; lexical SQLite fallback will be used")
@@ -111,7 +111,7 @@ class HybridEngine:
         known_ids = {str(row["chunk_id"]) for row in rows}
         if self._bm25 is not None and self._tokens is not None and self._rows:
             try:
-                tokens = __import__("bm25s").tokenize([query], stopwords="en", stemmer="english")
+                tokens = __import__("bm25s").tokenize([query], stopwords="en")
                 _, indexes = self._bm25.retrieve(tokens, k=min(take, len(self._rows)))
                 for index in indexes[0]:
                     if int(index) >= 0:
@@ -133,3 +133,4 @@ class HybridEngine:
         """Release references to all heavyweight objects so they can unload."""
         self._embedder = self._collection = self._client = None
         self._bm25 = self._tokens = self._corpus = self._rows = None
+
