@@ -40,6 +40,7 @@ class BotRuntime:
         from nanobot.agent.tools.registry import ToolRegistry
         from nanobot.agent.loop import AgentLoop
         from nanobot.config.schema import Config
+        from nanobot.config.loader import set_config_path
 
         settings = self.settings
         data_dir = self.db.path.parent
@@ -57,6 +58,12 @@ class BotRuntime:
                       "my": {"enable": False},
                       "mcp_servers": {}, "restrict_to_workspace": True},
         })
+        # Give Nanobot an instance-local config/data root so sessions, logs, and
+        # auxiliary state never fall back to ~/.nanobot.
+        nanobot_config = data_dir / "nanobot" / "config.json"
+        nanobot_config.parent.mkdir(parents=True, exist_ok=True)
+        config.bind_source_path(nanobot_config)
+        set_config_path(nanobot_config)
         registry = ToolRegistry()
         search = SearchFilesTool(self.engine)
         file_ops = FileOpsTool(self.db)
