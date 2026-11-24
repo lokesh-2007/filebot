@@ -155,6 +155,17 @@ class HybridEngine:
     def close(self) -> None:
         """Release references to all heavyweight objects so they can unload."""
         with self._lock:
-            self._embedder = self._collection = self._client = None
+            client = self._client
+            # Chroma's persistent client owns SQLite/native resources beyond the
+            # lifetime of Python references. Close it explicitly before dropping
+            # the last local handle so sleep releases file locks and memory.
+            self._collection = self._client = self._embedder = None
             self._bm25 = self._tokens = self._corpus = self._rows = None
-
+            close_client = getattr(client, "close", None)
+            if callable(close_client):
+                try:
+                    close_client()
+                except Exception:
+                    log.exception("Could not close the persistent Chroma client cleanly")
+            elif client is not None:
+                log.warning("Chroma client has no close() method; resources may remain until process exit")

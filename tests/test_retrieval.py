@@ -28,6 +28,31 @@ class ReciprocalRankFusionTests(unittest.TestCase):
 
 
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_close_releases_chroma_client_and_all_heavy_references(self) -> None:
+        class Client:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        engine = HybridEngine({}, db=None)
+        client = Client()
+        engine._client = client
+        engine._collection = object()
+        engine._embedder = object()
+        engine._bm25 = engine._tokens = engine._corpus = engine._rows = object()
+
+        engine.close()
+
+        self.assertTrue(client.closed)
+        self.assertIsNone(engine._client)
+        self.assertIsNone(engine._collection)
+        self.assertIsNone(engine._embedder)
+        self.assertIsNone(engine._bm25)
+        self.assertIsNone(engine._tokens)
+        self.assertIsNone(engine._corpus)
+        self.assertIsNone(engine._rows)
+
     def test_upsert_embeds_small_batches_and_keeps_old_vectors_until_commit(self) -> None:
         class Vector:
             def tolist(self):
@@ -98,4 +123,3 @@ class BoundedEmbeddingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
