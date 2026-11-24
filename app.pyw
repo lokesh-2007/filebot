@@ -10,6 +10,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from daemon.lifecycle_manager import LifecycleManager
+from daemon.instance_guard import InstanceGuard
 from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
 from storage.db import Database
@@ -34,34 +35,43 @@ def main() -> int:
         level=getattr(logging, str(settings["app"].get("log_level", "INFO")).upper(), logging.INFO),
         handlers=handlers, force=True,
     )
-    db = Database(db_path)
-    db.initialize()
     app = QApplication(sys.argv)
-    lifecycle = LifecycleManager(settings, db, root)
-    avatar = AvatarBubble()
-    watcher = FileWatcher(settings, db)
-    bridge = HotkeyBridge(settings["runtime"].get("hotkey", "<ctrl>+<alt>+space"))
-    avatar.toggled.connect(lifecycle.toggle)
-    avatar.status_changed.connect(lifecycle.set_status)
-    lifecycle.status_changed.connect(avatar.set_status)
-    lifecycle.popover_ready.connect(avatar.show_popover)
-    lifecycle.error_occurred.connect(
-        lambda message: QMessageBox.warning(avatar, "FileBot could not wake", message)
-    )
-    bridge.activated.connect(lifecycle.toggle)
+    guard = InstanceGuard(db_path.parent / "filebot.lock")
+    if not guard.acquire():
+        QMessageBox.information(None, "FileBot is already running",
+                                "The existing FileBot avatar is available in the desktop session.")
+        return 0
     try:
-        bridge.start()
-        watcher.start()
-        avatar.show()
-    except Exception:
-        watcher.stop()
-        bridge.stop()
-        lifecycle.shutdown()
-        raise
-    app.aboutToQuit.connect(watcher.stop)
-    app.aboutToQuit.connect(bridge.stop)
-    app.aboutToQuit.connect(lifecycle.shutdown)
-    return app.exec()
+        db = Database(db_path)
+        db.initialize()
+        lifecycle = LifecycleManager(settings, db, root)
+        avatar = AvatarBubble()
+        watcher = FileWatcher(settings, db)
+        bridge = HotkeyBridge(settings["runtime"].get("hotkey", "<ctrl>+<alt>+<space>"))
+        avatar.toggled.connect(lifecycle.toggle)
+        avatar.status_changed.connect(lifecycle.set_status)
+        lifecycle.status_changed.connect(avatar.set_status)
+        lifecycle.popover_ready.connect(avatar.show_popover)
+        lifecycle.error_occurred.connect(
+            lambda message: QMessageBox.warning(avatar, "FileBot could not wake", message)
+        )
+        bridge.activated.connect(lifecycle.toggle)
+        try:
+            bridge.start()
+            watcher.start()
+            avatar.show()
+        except Exception:
+            watcher.stop()
+            bridge.stop()
+            lifecycle.shutdown()
+            raise
+        app.aboutToQuit.connect(watcher.stop)
+        app.aboutToQuit.connect(bridge.stop)
+        app.aboutToQuit.connect(lifecycle.shutdown)
+        app.aboutToQuit.connect(guard.release)
+        return app.exec()
+    finally:
+        guard.release()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 import time
 import unittest
@@ -13,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from daemon.lifecycle_manager import LifecycleManager
+from daemon.instance_guard import InstanceGuard
 from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
 
@@ -35,6 +37,16 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(manager._busy)
         self.assertTrue(manager.idle.isActive())
         manager.idle.stop()
+
+    def test_instance_guard_allows_only_one_process_owner(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            lock_path = Path(directory) / "filebot.lock"
+            first, second = InstanceGuard(lock_path), InstanceGuard(lock_path)
+            self.assertTrue(first.acquire())
+            self.assertFalse(second.acquire())
+            first.release()
+            self.assertTrue(second.acquire())
+            second.release()
 
     def test_avatar_exposes_a_named_status_window(self) -> None:
         avatar = AvatarBubble()
