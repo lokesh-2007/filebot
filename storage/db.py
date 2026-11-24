@@ -254,8 +254,21 @@ class Database:
         with self.connect() as connection:
             return connection.execute("SELECT * FROM cmd_audit WHERE proposal_id=?", (proposal_id,)).fetchone()
 
+    def claim_approved_command(self, proposal_id: str) -> sqlite3.Row | None:
+        """Atomically claim an approved command so a rapid second click cannot run it twice."""
+        with self.connect() as connection:
+            claimed = connection.execute(
+                "UPDATE cmd_audit SET executed_at=strftime('%s','now') "
+                "WHERE proposal_id=? AND status='approved' AND executed_at IS NULL",
+                (proposal_id,),
+            )
+            if claimed.rowcount != 1:
+                return None
+            return connection.execute("SELECT * FROM cmd_audit WHERE proposal_id=?", (proposal_id,)).fetchone()
+
     def finish_command(self, proposal_id: str, exit_code: int, stdout: str, stderr: str) -> None:
         """Persist command completion details and output tails."""
         with self.connect() as connection:
             connection.execute("""UPDATE cmd_audit SET status=?,exit_code=?,stdout_tail=?,stderr_tail=?,executed_at=strftime('%s','now')
-                WHERE proposal_id=? AND status='approved'""", ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))
+                WHERE proposal_id=? AND status='approved' AND executed_at IS NOT NULL""",
+                ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))

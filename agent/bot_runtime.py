@@ -96,6 +96,12 @@ class BotRuntime:
         registry.register(OpenTool())
         registry.register(ProposeTool())
         loop = AgentLoop.from_config(config, tool_registry=registry)
+        # ToolLoader also discovers Nanobot defaults. Enforce an allowlist after
+        # construction so disabled settings or future upstream tools cannot widen access.
+        allowed_tools = {"search_files", "open_file", "propose_cmd"}
+        for name in tuple(loop.tools.tool_names):
+            if name not in allowed_tools:
+                loop.tools.unregister(name)
         self.bot = Nanobot(loop, config=config)
 
     def ask(self, prompt: str) -> str:

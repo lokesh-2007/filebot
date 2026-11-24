@@ -15,8 +15,8 @@ class CommandRunner:
 
     def execute(self, proposal_id: str) -> tuple[int, str, str]:
         """Run a staged row only if its database status is exactly approved."""
-        row = self.db.command_record(proposal_id)
-        if row is None or row["status"] != "approved":
+        row = self.db.claim_approved_command(proposal_id)
+        if row is None:
             raise PermissionError("Command must have an explicit approved audit record")
         cwd = Path(row["cwd"]).expanduser() if row["cwd"] else Path.home()
         if not cwd.is_dir():
