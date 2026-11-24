@@ -37,4 +37,5 @@ models:
 
 runtime:
   idle_unload_seconds: 120
-  hotkey: "<ctrl>+<alt>+space"
+  hotkey: "<ctrl>+<alt>+<space>"
+
