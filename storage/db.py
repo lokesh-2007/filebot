@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,3 +183,79 @@ class Database:
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not record queue error for {normalized}: {exc}") from exc
 
+    def get_file(self, path: str | Path) -> sqlite3.Row | None:
+        """Return indexed file metadata for a normalized path."""
+        with self.connect() as connection:
+            return connection.execute("SELECT * FROM files WHERE path=?", (str(Path(path).resolve()),)).fetchone()
+
+    def replace_file(self, path: str | Path, *, content_hash: str, size: int, mtime: float,
+                     chunks: list[dict[str, object]]) -> int:
+        """Atomically replace file metadata and chunk records; return file id."""
+        normalized = str(Path(path).resolve())
+        with self.connect() as connection:
+            connection.execute("""INSERT INTO files(path,file_name,ext,content_hash,size_bytes,mtime,chunk_count,status,last_indexed,error,indexed_at)
+                VALUES(?,?,?,?,?,?,?,'indexed',strftime('%s','now'),NULL,datetime('now'))
+                ON CONFLICT(path) DO UPDATE SET file_name=excluded.file_name,ext=excluded.ext,content_hash=excluded.content_hash,
+                size_bytes=excluded.size_bytes,mtime=excluded.mtime,chunk_count=excluded.chunk_count,status='indexed',
+                last_indexed=excluded.last_indexed,error=NULL,indexed_at=excluded.indexed_at""",
+                (normalized, Path(normalized).name, Path(normalized).suffix.lower(), content_hash, size, mtime, len(chunks)))
+            file_id = int(connection.execute("SELECT file_id FROM files WHERE path=?", (normalized,)).fetchone()[0])
+            connection.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+            for index, item in enumerate(chunks):
+                chunk_id = hashlib.sha256(f"{normalized}:{index}".encode("utf-8")).hexdigest()
+                connection.execute("""INSERT INTO chunks(chunk_id,file_id,chunk_index,page_or_line,heading,snippet,token_count,vector_id)
+                    VALUES(?,?,?,?,?,?,?,?)""", (chunk_id,file_id,index,item.get("page_or_line"),item.get("heading"),
+                    str(item.get("text", "")),len(str(item.get("text", "")).split()),chunk_id))
+            return file_id
+
+    def delete_file(self, path: str | Path) -> None:
+        """Remove an indexed file and its dependent chunks and signals."""
+        with self.connect() as connection:
+            connection.execute("DELETE FROM files WHERE path=?", (str(Path(path).resolve()),))
+
+    def all_chunks(self) -> list[sqlite3.Row]:
+        """Return chunk corpus records for the in-memory BM25 index."""
+        with self.connect() as connection:
+            return list(connection.execute("""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading
+                FROM chunks c JOIN files f USING(file_id) WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""))
+
+    def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
+        """Fallback lexical search using SQLite LIKE when BM25 is not active."""
+        terms = [f"%{term}%" for term in query.split() if term]
+        if not terms:
+            return []
+        clause = " OR ".join("c.snippet LIKE ?" for _ in terms)
+        with self.connect() as connection:
+            return list(connection.execute(f"""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading
+                FROM chunks c JOIN files f USING(file_id) WHERE {clause} LIMIT ?""", (*terms, limit)))
+
+    def stage_command(self, command: str, cwd: str, reason: str, risk: str, status: str = "pending") -> str:
+        """Create an immutable audit proposal and return its identifier."""
+        proposal_id = str(uuid.uuid4())
+        with self.connect() as connection:
+            connection.execute("""INSERT INTO cmd_audit(proposal_id,command,cwd,reason,risk_level,status,created_at)
+                VALUES(?,?,?,?,?,?,strftime('%s','now'))""", (proposal_id,command,cwd,reason,risk,status))
+        return proposal_id
+
+    def pending_commands(self) -> list[sqlite3.Row]:
+        """Return commands awaiting an explicit user decision."""
+        with self.connect() as connection:
+            return list(connection.execute("SELECT * FROM cmd_audit WHERE status='pending' ORDER BY created_at"))
+
+    def decide_command(self, proposal_id: str, approved: bool) -> bool:
+        """Record the explicit UI decision; return whether a pending row changed."""
+        with self.connect() as connection:
+            result = connection.execute("UPDATE cmd_audit SET status=?,approved_at=strftime('%s','now') WHERE proposal_id=? AND status='pending'",
+                                        ("approved" if approved else "rejected", proposal_id))
+            return result.rowcount == 1
+
+    def command_record(self, proposal_id: str) -> sqlite3.Row | None:
+        """Read one command audit record."""
+        with self.connect() as connection:
+            return connection.execute("SELECT * FROM cmd_audit WHERE proposal_id=?", (proposal_id,)).fetchone()
+
+    def finish_command(self, proposal_id: str, exit_code: int, stdout: str, stderr: str) -> None:
+        """Persist command completion details and output tails."""
+        with self.connect() as connection:
+            connection.execute("""UPDATE cmd_audit SET status=?,exit_code=?,stdout_tail=?,stderr_tail=?,executed_at=strftime('%s','now')
+                WHERE proposal_id=? AND status='approved'""", ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))
