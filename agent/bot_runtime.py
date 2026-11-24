@@ -51,7 +51,8 @@ class BotRuntime:
                                      "disabled_skills": ["*"]}},
             "providers": {"ollama": {"api_base": base_url}},
             "tools": {"exec": {"enable": False}, "file": {"enable": False},
-                      "web": {"search": {"enable": False}, "fetch": {"enable": False}},
+                      "web": {"enable": False}, "cli_apps": {"enable": False},
+                      "my": {"enable": False},
                       "mcp_servers": {}, "restrict_to_workspace": True},
         })
         registry = ToolRegistry()
