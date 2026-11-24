@@ -217,15 +217,22 @@ class BotRuntime:
             self.bot = None
         finally:
             self._stop_async_loop()
+        client = None
         try:
             if not self._model_used:
                 return
             from ollama import Client
             ollama = self.settings["models"]["ollama"]
-            Client(host=ollama["base_url"]).generate(model=ollama["model"], prompt="", stream=False,
-                keep_alive=ollama.get("keep_alive", "0"))
+            client = Client(host=ollama["base_url"])
+            client.generate(model=ollama["model"], prompt="", stream=False,
+                            keep_alive=ollama.get("keep_alive", "0"))
         except Exception:
             log.debug("Ollama idle unload request failed", exc_info=True)
         finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    log.debug("Could not close the Ollama HTTP client cleanly", exc_info=True)
             self._model_used = False
 

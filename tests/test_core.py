@@ -125,6 +125,37 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(bot.loops), 3)
         self.assertTrue(all(loop is bot.loops[0] for loop in bot.loops))
 
+    def test_bot_runtime_closes_ollama_client_after_idle_unload(self) -> None:
+        class FakeOllamaClient:
+            def __init__(self) -> None:
+                self.generate_args = None
+                self.closed = False
+
+            def generate(self, **kwargs):
+                self.generate_args = kwargs
+
+            def close(self):
+                self.closed = True
+
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return []
+
+        runtime = BotRuntime(
+            {"models": {"ollama": {"base_url": "http://127.0.0.1:11434",
+                                     "model": "qwen2.5-coder:3b", "keep_alive": "2m"}}},
+            self.db, FakeEngine(),
+        )
+        runtime._model_used = True
+        client = FakeOllamaClient()
+        with patch("ollama.Client", return_value=client):
+            runtime.close()
+
+        self.assertTrue(client.closed)
+        self.assertEqual(client.generate_args["prompt"], "")
+        self.assertEqual(client.generate_args["keep_alive"], "2m")
+        self.assertFalse(runtime._model_used)
+
     def test_cancel_pending_unblocks_a_running_model_turn(self) -> None:
         class WaitingBot:
             async def run(self, prompt, **kwargs):
