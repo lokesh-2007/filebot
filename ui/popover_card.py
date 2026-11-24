@@ -30,9 +30,27 @@ class _Task(QThread):
             self.done.emit(None, str(exc))
 
 
+class _CommandTask(QThread):
+    done = pyqtSignal(int, str, str, str)
+
+    def __init__(self, runner: CommandRunner, proposal_id: str) -> None:
+        super().__init__()
+        self.runner, self.proposal_id = runner, proposal_id
+
+    def run(self) -> None:
+        try:
+            code, stdout, stderr = self.runner.execute(self.proposal_id)
+            self.done.emit(code, stdout, stderr, "")
+        except Exception as exc:
+            log.exception("Approved command execution failed")
+            self.done.emit(-1, "", "", str(exc))
+
+
 class PopoverCard(QWidget):
     """Search/chat panel that surfaces pending commands with Approve/Reject controls."""
     activity = pyqtSignal()
+    work_started = pyqtSignal()
+    work_finished = pyqtSignal()
     status_changed = pyqtSignal(str)
     def __init__(self, engine: Any, runtime: Any, db: Database) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
@@ -68,6 +86,7 @@ class PopoverCard(QWidget):
         self.pending = QVBoxLayout()
         layout.addLayout(self.pending)
         self._task: _Task | None = None
+        self._command_task: _CommandTask | None = None
         self._refresh_pending()
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
@@ -80,6 +99,7 @@ class PopoverCard(QWidget):
         self.search_button.setEnabled(False)
         self.ask_button.setEnabled(False)
         self.status_changed.emit("active")
+        self.work_started.emit()
         self._task = _Task(self.runtime, prompt, force_search)
         self._task.done.connect(self._received)
         self._task.start()
@@ -89,6 +109,7 @@ class PopoverCard(QWidget):
         self.ask_button.setEnabled(True)
         if error:
             self.answer.setPlainText(error)
+            self.work_finished.emit()
             return
         if isinstance(result, list):
             self.results.clear()
@@ -102,6 +123,7 @@ class PopoverCard(QWidget):
         else:
             self.answer.setPlainText(str(result))
         self._refresh_pending()
+        self.work_finished.emit()
 
     def open_result(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -128,6 +150,8 @@ class PopoverCard(QWidget):
             self.pending.addWidget(card)
         if rows:
             self.status_changed.emit("cmd_pending")
+        else:
+            self.status_changed.emit("active")
 
     def _decide(self, proposal_id: str, approved: bool) -> None:
         if not self.db.decide_command(proposal_id, approved):
@@ -136,10 +160,16 @@ class PopoverCard(QWidget):
             return
         if approved:
             self.status_changed.emit("active")
-            try:
-                code, stdout, stderr = self.runner.execute(proposal_id)
-                self.answer.setPlainText(f"Exit code: {code}\n{stdout}\n{stderr}".strip())
-            except Exception as exc:
-                log.exception("Approved command failed")
-                self.answer.setPlainText(f"Could not run approved command: {exc}")
+            self.work_started.emit()
+            self._command_task = _CommandTask(self.runner, proposal_id)
+            self._command_task.done.connect(self._command_received)
+            self._command_task.start()
         self._refresh_pending()
+
+    def _command_received(self, code: int, stdout: str, stderr: str, error: str) -> None:
+        if error:
+            self.answer.setPlainText(f"Could not run approved command: {error}")
+        else:
+            self.answer.setPlainText(f"Exit code: {code}\n{stdout}\n{stderr}".strip())
+        self._refresh_pending()
+        self.work_finished.emit()

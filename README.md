@@ -34,7 +34,7 @@ For startup diagnostics, use `python .\app.pyw` from a console. `pynput` may req
 
 ## Search and indexing
 
-Watchdog records debounced file changes in SQLite. It does not load an embedding model. On wake, the index worker drains this durable queue and combines dense FastEmbed/ChromaDB results with BM25 results using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Searches are local after first-time package/model downloads.
+Watchdog records debounced file changes in SQLite. It does not load an embedding model. Wake-up loads retrieval resources on a background thread, and each search drains up to 100 queued file changes before querying, so large folders are handled over bounded batches. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
 
 The indexer intentionally handles only extensions listed in settings. Changing the roots or extensions does not automatically remove old database records; remove the database under `~/.filebot` if you want to rebuild from scratch.
 

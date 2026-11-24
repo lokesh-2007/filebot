@@ -19,18 +19,21 @@ class IndexWorker:
 
     def drain(self, limit: int = 100) -> int:
         processed = 0
+        corpus_changed = False
         config = self.settings["index"]
         for row in self.db.pending_dirty(limit):
             path = Path(row["path"])
             try:
                 if row["operation"] == "delete" or not path.exists():
-                    self.engine.delete(path)
+                    self.engine.delete(path, refresh_lexical=False)
                     self.db.delete_file(path)
+                    corpus_changed = True
                 else:
                     stat = path.stat()
                     if stat.st_size > int(config.get("max_file_bytes", 50 * 1024 * 1024)):
-                        self.engine.delete(path)
+                        self.engine.delete(path, refresh_lexical=False)
                         self.db.delete_file(path)
+                        corpus_changed = True
                         self.db.remove_dirty(path)
                         processed += 1
                         continue
@@ -45,7 +48,8 @@ class IndexWorker:
                     records = [{"text": item.text, "page_or_line": item.page_or_line, "heading": item.heading} for item in parsed]
                     self.db.replace_file(path, content_hash=digest, size=stat.st_size,
                                          mtime=stat.st_mtime, chunks=records)
-                    self.engine.upsert(path, parsed)
+                    self.engine.upsert(path, parsed, refresh_lexical=False)
+                    corpus_changed = True
                 self.db.remove_dirty(path)
                 processed += 1
             except Exception as exc:
@@ -54,4 +58,6 @@ class IndexWorker:
                     self.db.record_dirty_error(path, str(exc))
                 except Exception:
                     log.exception("Could not persist index error for %s", path)
+        if corpus_changed:
+            self.engine.refresh_lexical_index()
         return processed

@@ -14,6 +14,7 @@ from agent.tools.search_tool import SearchFilesTool
 from executor.policy_engine import PolicyEngine
 from executor.cmd_runner import CommandRunner
 from storage.db import Database
+from retrieval.index_worker import IndexWorker
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class BotRuntime:
         self.router = FastRouter()
         self.policy = PolicyEngine(Path(__file__).resolve().parents[1] / "config" / "cmd_policy.yaml")
         self.runner = CommandRunner(db)
+        self.indexer = IndexWorker(settings, db, engine)
         self.bot = None
         self._model_used = False
         self._session = "filebot:desktop"
@@ -107,6 +109,8 @@ class BotRuntime:
     def ask(self, prompt: str) -> str:
         """Handle one user prompt, routing search and CMD intent before Nanobot."""
         intent = self.router.route(prompt)
+        if intent != "cmd":
+            self.indexer.drain(limit=100)
         self._activate()
         assert self.bot is not None
         if intent == "cmd":
@@ -123,6 +127,7 @@ class BotRuntime:
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return direct local retrieval matches for the compact search view."""
+        self.indexer.drain(limit=100)
         return self.engine.search(query, 20)
 
     def close(self) -> None:

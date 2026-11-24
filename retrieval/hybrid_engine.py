@@ -45,7 +45,7 @@ class HybridEngine:
             log.exception("BM25 index unavailable; lexical SQLite fallback will be used")
             self._bm25 = self._tokens = None
 
-    def upsert(self, file_path: Path, chunks: list[Any]) -> None:
+    def upsert(self, file_path: Path, chunks: list[Any], *, refresh_lexical: bool = True) -> None:
         texts = [c.text for c in chunks]
         embeddings = list(self._embedder.embed(texts)) if texts else []
         previous = self._collection.get(where={"path": str(file_path.resolve())}, include=[])
@@ -55,9 +55,10 @@ class HybridEngine:
         if ids:
             self._collection.upsert(ids=ids, embeddings=[v.tolist() for v in embeddings], documents=texts,
                 metadatas=[{"path": str(file_path.resolve()), "chunk_index": i} for i in range(len(texts))])
-        self._refresh_bm25()
+        if refresh_lexical:
+            self._refresh_bm25()
 
-    def delete(self, path: str | Path) -> None:
+    def delete(self, path: str | Path, *, refresh_lexical: bool = True) -> None:
         file = str(Path(path).resolve())
         try:
             found = self._collection.get(where={"path": file}, include=[])
@@ -65,6 +66,11 @@ class HybridEngine:
                 self._collection.delete(ids=found["ids"])
         except Exception:
             log.debug("No vector records to delete for %s", file, exc_info=True)
+        if refresh_lexical:
+            self._refresh_bm25()
+
+    def refresh_lexical_index(self) -> None:
+        """Rebuild in-memory BM25 once after a group of queued file changes."""
         self._refresh_bm25()
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:

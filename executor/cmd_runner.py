@@ -20,7 +20,9 @@ class CommandRunner:
             raise PermissionError("Command must have an explicit approved audit record")
         cwd = Path(row["cwd"]).expanduser() if row["cwd"] else Path.home()
         if not cwd.is_dir():
-            raise ValueError("Command working directory is not an existing directory")
+            message = "Command working directory is not an existing directory"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message
         try:
             completed = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", row["command"]],
                 cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=self.timeout,
@@ -30,5 +32,7 @@ class CommandRunner:
             stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
             stderr = f"Command timed out after {self.timeout}s"
             code = 124
+        except OSError as exc:
+            stdout, stderr, code = "", str(exc), 127
         self.db.finish_command(proposal_id, code, stdout, stderr)
         return code, stdout[-4000:], stderr[-4000:]
