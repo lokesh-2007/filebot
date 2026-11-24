@@ -1,8 +1,10 @@
+
 """Focused tests for persistence, command policy, parsers, routing, and indexing."""
 from __future__ import annotations
 
 import tempfile
 import asyncio
+import os
 import unittest
 import threading
 import time
@@ -75,6 +77,8 @@ class DatabaseTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 CommandRunner(self.db).execute(proposal)
         run.assert_called_once()
+        system32 = Path(os.environ["SystemRoot"]) / "System32"
+        self.assertEqual(Path(run.call_args.args[0][0]), system32 / "cmd.exe")
         row = self.db.command_record(proposal)
         self.assertEqual(row["status"], "executed")
         self.assertEqual(row["exit_code"], 0)
@@ -168,7 +172,21 @@ class PolicyAndParserTests(unittest.TestCase):
         self.assertEqual(policy.classify("format D:"), "blocked")
         self.assertEqual(policy.classify("dir & whoami"), "blocked")
         self.assertEqual(policy.classify(r"mkdir %TEMP%\FileBot"), "blocked")
+        self.assertEqual(policy.classify("whoami.exe"), "blocked")
+        self.assertEqual(policy.classify("mkdir.exe new-folder"), "blocked")
         self.assertEqual(policy.classify("unknown-command"), "blocked")
+
+    def test_read_only_windows_utility_uses_system32_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            db = Database(Path(directory) / "state.sqlite3")
+            db.initialize()
+            proposal = db.stage_command("whoami", directory, "show current account", "read_only")
+            self.assertTrue(db.decide_command(proposal, True))
+            fake_result = SimpleNamespace(returncode=0, stdout="tester\n", stderr="")
+            with patch("executor.cmd_runner.subprocess.run", return_value=fake_result) as run:
+                CommandRunner(db).execute(proposal)
+            system32 = Path(os.environ["SystemRoot"]) / "System32"
+            self.assertEqual(Path(run.call_args.kwargs["cwd"]), system32)
 
     def test_text_chunking_preserves_overlap(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:

@@ -1,7 +1,9 @@
+
 """The only module allowed to start a Windows command, and only after approval."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -33,13 +35,26 @@ class CommandRunner:
             message = "Command is no longer allowed by the current policy"
             self.db.finish_command(proposal_id, 126, "", message)
             return 126, "", message
-        cwd = Path(row["cwd"]).expanduser() if row["cwd"] else Path.home()
+        system_root = os.environ.get("SystemRoot")
+        system32 = Path(system_root) / "System32" if system_root else None
+        if system32 is None or not system32.is_dir() or not (system32 / "cmd.exe").is_file():
+            message = "Windows System32 command processor is unavailable"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message
+
+        command = str(row["command"])
+        external_read_only = bool(re.match(
+            r"^\s*(?:where|whoami|systeminfo|ipconfig|tasklist)(?:\s|$)", command, re.IGNORECASE
+        ))
+        # Prevent a user folder or a modified PATH from shadowing approved
+        # Windows utilities. These built-ins do not need the proposed cwd.
+        cwd = system32 if external_read_only else (Path(row["cwd"]).expanduser() if row["cwd"] else Path.home())
         if not cwd.is_dir():
             message = "Command working directory is not an existing directory"
             self.db.finish_command(proposal_id, 126, "", message)
             return 126, "", message
         try:
-            completed = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", row["command"]],
+            completed = subprocess.run([str(system32 / "cmd.exe"), "/d", "/s", "/c", command],
                 cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=self.timeout,
                 check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             code, stdout, stderr = completed.returncode, completed.stdout, completed.stderr
