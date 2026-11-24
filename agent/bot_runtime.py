@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +31,59 @@ class BotRuntime:
         self.bot = None
         self._model_used = False
         self._session = "filebot:desktop"
+        self._async_loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_started = threading.Event()
+
+    def _start_async_loop(self) -> None:
+        """Start one persistent event loop for Nanobot's awake lifetime."""
+        if self._async_loop is not None and self._async_loop.is_running():
+            return
+        loop = asyncio.new_event_loop()
+        self._async_loop = loop
+        self._loop_started.clear()
+
+        def run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            self._loop_started.set()
+            loop.run_forever()
+
+        self._loop_thread = threading.Thread(
+            target=run_loop, name="FileBot-Nanobot-asyncio", daemon=True
+        )
+        self._loop_thread.start()
+        if not self._loop_started.wait(timeout=5):
+            self._stop_async_loop()
+            raise RuntimeError("Nanobot event loop did not start")
+
+    def _run_async(self, coroutine: Any) -> Any:
+        """Run a coroutine on Nanobot's persistent loop from a UI worker thread."""
+        loop = self._async_loop
+        if loop is None or not loop.is_running():
+            raise RuntimeError("Nanobot event loop is not running")
+        return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
+
+    def _stop_async_loop(self) -> None:
+        """Stop and close Nanobot's event loop after its resources are released."""
+        loop, thread = self._async_loop, self._loop_thread
+        self._async_loop = None
+        self._loop_thread = None
+        if loop is None:
+            return
+        if loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=5)
+            if thread.is_alive():
+                log.error("Nanobot event loop thread did not stop cleanly")
+                return
+        if not loop.is_running() and not loop.is_closed():
+            loop.close()
 
     def _activate(self) -> None:
         if self.bot is not None:
             return
+        self._start_async_loop()
         # Heavy agent modules are imported only after the user wakes FileBot.
         from nanobot import Nanobot
         from nanobot.agent.tools.base import Tool, tool_parameters
@@ -128,7 +178,7 @@ class BotRuntime:
             hits = self.engine.search(prompt, 8)
             context = "\n\nLocal search results (cite paths; do not invent file contents):\n" + json.dumps(hits, ensure_ascii=False)
             prompt += context
-        result = asyncio.run(self.bot.run(prompt, session_key=self._session, channel="filebot"))
+        result = self._run_async(self.bot.run(prompt, session_key=self._session, channel="filebot"))
         self._model_used = True
         return str(result.content)
 
@@ -139,12 +189,15 @@ class BotRuntime:
 
     def close(self) -> None:
         """Close Nanobot resources and release all references."""
-        if self.bot is not None:
-            try:
-                asyncio.run(self.bot.aclose())
-            except Exception:
-                log.exception("Could not close Nanobot runtime cleanly")
-        self.bot = None
+        try:
+            if self.bot is not None:
+                try:
+                    self._run_async(self.bot.aclose())
+                except Exception:
+                    log.exception("Could not close Nanobot runtime cleanly")
+            self.bot = None
+        finally:
+            self._stop_async_loop()
         try:
             if not self._model_used:
                 return
@@ -156,3 +209,4 @@ class BotRuntime:
             log.debug("Ollama idle unload request failed", exc_info=True)
         finally:
             self._model_used = False
+
