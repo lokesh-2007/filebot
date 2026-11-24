@@ -1,14 +1,30 @@
-
 """The only module allowed to start a Windows command, and only after approval."""
 from __future__ import annotations
 
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from executor.policy_engine import PolicyEngine
 from storage.db import Database
+
+_OUTPUT_TAIL_BYTES = 64 * 1024
+
+
+def _read_output_tail(stream: object, limit: int = _OUTPUT_TAIL_BYTES) -> bytes:
+    """Drain a subprocess pipe while retaining only its last ``limit`` bytes."""
+    if limit < 1:
+        raise ValueError("output tail limit must be positive")
+    tail = bytearray()
+    while True:
+        chunk = stream.read(4096)  # type: ignore[attr-defined]
+        if not chunk:
+            return bytes(tail)
+        tail.extend(chunk)
+        if len(tail) > limit:
+            del tail[:len(tail) - limit]
 
 
 class CommandRunner:
@@ -53,15 +69,38 @@ class CommandRunner:
             message = "Command working directory is not an existing directory"
             self.db.finish_command(proposal_id, 126, "", message)
             return 126, "", message
+        readers: list[threading.Thread] = []
+        output: dict[str, bytes] = {}
         try:
-            completed = subprocess.run([str(system32 / "cmd.exe"), "/d", "/s", "/c", command],
-                cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=self.timeout,
-                check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            code, stdout, stderr = completed.returncode, completed.stdout, completed.stderr
-        except subprocess.TimeoutExpired as exc:
-            stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-            stderr = f"Command timed out after {self.timeout}s"
-            code = 124
+            process = subprocess.Popen(
+                [str(system32 / "cmd.exe"), "/d", "/s", "/c", command],
+                cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            assert process.stdout is not None and process.stderr is not None
+            for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+                reader = threading.Thread(
+                    target=lambda key=name, pipe=stream: output.__setitem__(key, _read_output_tail(pipe)),
+                    name=f"FileBotCMD-{name}", daemon=True,
+                )
+                readers.append(reader)
+                reader.start()
+            try:
+                code = process.wait(timeout=self.timeout)
+                timed_out = False
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                code = 124
+                timed_out = True
+            for reader in readers:
+                reader.join(timeout=2)
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+            stdout = output.get("stdout", b"").decode("utf-8", errors="replace")
+            stderr = output.get("stderr", b"").decode("utf-8", errors="replace")
+            if timed_out:
+                stderr = f"Command timed out after {self.timeout}s" + (f"\n{stderr}" if stderr else "")
         except OSError as exc:
             stdout, stderr, code = "", str(exc), 127
         self.db.finish_command(proposal_id, code, stdout, stderr)

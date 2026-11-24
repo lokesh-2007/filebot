@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import asyncio
+from io import BytesIO
 import os
 import unittest
 import threading
@@ -13,7 +14,7 @@ from unittest.mock import patch
 
 from agent.fast_router import FastRouter
 from agent.bot_runtime import BotRuntime
-from executor.cmd_runner import CommandRunner
+from executor.cmd_runner import CommandRunner, _read_output_tail
 from executor.policy_engine import PolicyEngine
 from retrieval.index_worker import IndexQueueService, IndexWorker
 from retrieval.parsers import parse_file
@@ -21,6 +22,18 @@ from storage.db import Database
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeCommandProcess:
+    def __init__(self, stdout: bytes = b"tester\n", stderr: bytes = b"") -> None:
+        self.stdout = BytesIO(stdout)
+        self.stderr = BytesIO(stderr)
+
+    def wait(self, timeout=None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        raise AssertionError("successful fake process should not be killed")
 
 
 class DatabaseTests(unittest.TestCase):
@@ -69,8 +82,7 @@ class DatabaseTests(unittest.TestCase):
     def test_command_claim_is_single_use(self) -> None:
         proposal = self.db.stage_command("whoami", str(self.root), "test", "read_only")
         self.assertTrue(self.db.decide_command(proposal, True))
-        fake_result = SimpleNamespace(returncode=0, stdout="tester\n", stderr="")
-        with patch("executor.cmd_runner.subprocess.run", return_value=fake_result) as run:
+        with patch("executor.cmd_runner.subprocess.Popen", return_value=_FakeCommandProcess()) as run:
             code, stdout, _ = CommandRunner(self.db).execute(proposal)
             self.assertEqual((code, stdout), (0, "tester\n"))
             with self.assertRaises(PermissionError):
@@ -89,7 +101,7 @@ class DatabaseTests(unittest.TestCase):
             policy_path.write_text("version: 1\ndefault: blocked\nblocked: []\nread_only: []\ngated: []\n", encoding="utf-8")
             proposal = self.db.stage_command("mkdir new-folder", str(self.root), "create folder", "gated")
             self.assertTrue(self.db.decide_command(proposal, True))
-            with patch("executor.cmd_runner.subprocess.run") as run:
+            with patch("executor.cmd_runner.subprocess.Popen") as run:
                 code, _, error = CommandRunner(self.db, policy_path=policy_path).execute(proposal)
             self.assertEqual(code, 126)
             self.assertIn("current policy", error)
@@ -148,7 +160,8 @@ class DatabaseTests(unittest.TestCase):
         )
         runtime._model_used = True
         client = FakeOllamaClient()
-        with patch("ollama.Client", return_value=client):
+        fake_ollama = SimpleNamespace(Client=lambda **kwargs: client)
+        with patch.dict("sys.modules", {"ollama": fake_ollama}):
             runtime.close()
 
         self.assertTrue(client.closed)
@@ -195,6 +208,12 @@ class DatabaseTests(unittest.TestCase):
 
 
 class PolicyAndParserTests(unittest.TestCase):
+    def test_command_output_capture_keeps_only_a_bounded_tail(self) -> None:
+        payload = b"a" * 20000 + b"last-bytes"
+        tail = _read_output_tail(BytesIO(payload), limit=1024)
+        self.assertEqual(len(tail), 1024)
+        self.assertEqual(tail[-10:], b"last-bytes")
+
     def test_default_deny_policy_classifies_commands(self) -> None:
         policy = PolicyEngine(ROOT / "config" / "cmd_policy.yaml")
         self.assertEqual(policy.classify("whoami"), "read_only")
@@ -212,8 +231,7 @@ class PolicyAndParserTests(unittest.TestCase):
             db.initialize()
             proposal = db.stage_command("whoami", directory, "show current account", "read_only")
             self.assertTrue(db.decide_command(proposal, True))
-            fake_result = SimpleNamespace(returncode=0, stdout="tester\n", stderr="")
-            with patch("executor.cmd_runner.subprocess.run", return_value=fake_result) as run:
+            with patch("executor.cmd_runner.subprocess.Popen", return_value=_FakeCommandProcess()) as run:
                 CommandRunner(db).execute(proposal)
             system32 = Path(os.environ["SystemRoot"]) / "System32"
             self.assertEqual(Path(run.call_args.kwargs["cwd"]), system32)
