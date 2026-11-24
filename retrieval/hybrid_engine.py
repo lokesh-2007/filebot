@@ -73,6 +73,28 @@ class HybridEngine:
         """Rebuild in-memory BM25 once after a group of queued file changes."""
         self._refresh_bm25()
 
+    @staticmethod
+    def reciprocal_rank_fusion(
+        dense_ids: list[str], lexical_ids: list[str], rows: list[Any], limit: int, *, k: int = 60,
+    ) -> list[dict[str, Any]]:
+        """Fuse ranked chunk IDs and attach their stored source metadata."""
+        scores: dict[str, float] = {}
+        lookup = {str(row["chunk_id"]): row for row in rows}
+        for ranking in (dense_ids, lexical_ids):
+            for rank, chunk_id in enumerate(ranking, 1):
+                scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank)
+        results: list[dict[str, Any]] = []
+        for chunk_id, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]:
+            row = lookup.get(chunk_id)
+            results.append({
+                "path": row["path"] if row else "",
+                "snippet": row["snippet"] if row else "",
+                "score": score,
+                "page_or_line": row["page_or_line"] if row else None,
+                "heading": row["heading"] if row else None,
+            })
+        return results
+
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         if not query.strip() or self._embedder is None:
             return []
@@ -85,7 +107,8 @@ class HybridEngine:
         except Exception:
             log.exception("Vector search failed")
         lexical: list[str] = []
-        lookup: dict[str, Any] = {}
+        rows = list(self._rows or [])
+        known_ids = {str(row["chunk_id"]) for row in rows}
         if self._bm25 is not None and self._tokens is not None and self._rows:
             try:
                 tokens = __import__("bm25s").tokenize([query], stopwords="en", stemmer="english")
@@ -95,29 +118,16 @@ class HybridEngine:
                         row = self._rows[int(index)]
                         key = str(row["chunk_id"])
                         lexical.append(key)
-                        lookup[key] = row
             except Exception:
                 log.exception("BM25 search failed")
         if not lexical:
             for row in self.db.search_lexical(query, take):
                 key = str(row["chunk_id"])
                 lexical.append(key)
-                lookup[key] = row
-        scores: dict[str, float] = {}
-        for ranked in (dense, lexical):
-            for rank, key in enumerate(ranked, 1):
-                scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
-        # Hydrate using a lexical lookup when available; otherwise return a path and vector snippet.
-        out = []
-        if self._rows:
-            lookup.update({str(row["chunk_id"]): row for row in self._rows})
-        for key, score in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]:
-            row = lookup.get(key)
-            out.append({"path": row["path"] if row else "",
-                        "snippet": row["snippet"] if row else "", "score": score,
-                        "page_or_line": row["page_or_line"] if row else None,
-                        "heading": row["heading"] if row else None})
-        return out
+                if key not in known_ids:
+                    rows.append(row)
+                    known_ids.add(key)
+        return self.reciprocal_rank_fusion(dense, lexical, rows, limit)
 
     def close(self) -> None:
         """Release references to all heavyweight objects so they can unload."""

@@ -44,6 +44,14 @@ The indexer intentionally handles only extensions listed in settings. Changing t
 
 Treat policy edits as security-sensitive. Keep installer, privilege, shell chaining, redirection, and broad recursive deletion commands blocked.
 
+## Run unit tests
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The Windows GitHub Actions workflow runs the unit suite on Python 3.11 and 3.12. It installs only the test-time YAML dependency; the full local model, vector database, and desktop UI stack is not needed for these unit tests.
+
 ## Data and privacy
 
 The file index, audit log, vectors, and Nanobot workspace stay on this machine. Ollama inference uses the configured local endpoint. Initial dependency, Ollama model, and embedding model downloads require network access. File contents are not sent to a remote model by FileBot's configured Ollama route.
