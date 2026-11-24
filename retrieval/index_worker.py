@@ -52,8 +52,10 @@ class IndexWorker:
                         continue
                     raw = path.read_bytes()
                     digest = hashlib.sha256(raw).hexdigest()
+                    del raw
                     current = self.db.get_file(path)
                     if current and current["status"] == "indexed" and current["content_hash"] == digest:
+                        self.engine.delete_obsolete(path, self.db.vector_ids_for_file(path))
                         self.db.remove_dirty(path, float(row["queued_at"]))
                         processed += 1
                         continue
@@ -63,9 +65,10 @@ class IndexWorker:
                     # process stops between these operations, the durable dirty row
                     # causes a safe vector upsert on the next wake instead of falsely
                     # treating an incomplete index operation as complete.
-                    self.engine.upsert(path, parsed, refresh_lexical=False)
+                    self.engine.upsert(path, parsed, content_hash=digest, refresh_lexical=False)
                     self.db.replace_file(path, content_hash=digest, size=stat.st_size,
                                          mtime=stat.st_mtime, chunks=records)
+                    self.engine.delete_obsolete(path, self.db.vector_ids_for_file(path))
                     corpus_changed = True
                 self.db.remove_dirty(path, float(row["queued_at"]))
                 processed += 1

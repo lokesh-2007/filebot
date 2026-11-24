@@ -1,4 +1,3 @@
-
 """Focused tests for persistence, command policy, parsers, routing, and indexing."""
 from __future__ import annotations
 
@@ -219,8 +218,11 @@ class IndexWorkerTests(unittest.TestCase):
                     self.upserts = []
                     self.refreshes = 0
 
-                def upsert(self, path, chunks, *, refresh_lexical=True) -> None:
+                def upsert(self, path, chunks, *, content_hash, refresh_lexical=True) -> None:
                     self.upserts.append((path, chunks, refresh_lexical))
+
+                def delete_obsolete(self, path, keep_ids) -> None:
+                    pass
 
                 def delete(self, path, *, refresh_lexical=True) -> None:
                     raise AssertionError("unexpected delete")
@@ -250,8 +252,11 @@ class IndexWorkerTests(unittest.TestCase):
             db.enqueue_dirty(file_path, "upsert")
 
             class FailingEngine:
-                def upsert(self, path, chunks, *, refresh_lexical=True) -> None:
+                def upsert(self, path, chunks, *, content_hash, refresh_lexical=True) -> None:
                     raise RuntimeError("vector store unavailable")
+
+                def delete_obsolete(self, path, keep_ids) -> None:
+                    pass
 
                 def delete(self, path, *, refresh_lexical=True) -> None:
                     raise AssertionError("unexpected delete")
@@ -276,8 +281,11 @@ class IndexWorkerTests(unittest.TestCase):
             completed = threading.Event()
 
             class FakeEngine:
-                def upsert(self, path, chunks, *, refresh_lexical=True) -> None:
+                def upsert(self, path, chunks, *, content_hash, refresh_lexical=True) -> None:
                     completed.set()
+
+                def delete_obsolete(self, path, keep_ids) -> None:
+                    pass
 
                 def delete(self, path, *, refresh_lexical=True) -> None:
                     raise AssertionError("unexpected delete")

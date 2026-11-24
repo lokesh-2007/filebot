@@ -50,19 +50,33 @@ class HybridEngine:
                 log.exception("BM25 index unavailable; lexical SQLite fallback will be used")
                 self._bm25 = self._tokens = None
 
-    def upsert(self, file_path: Path, chunks: list[Any], *, refresh_lexical: bool = True) -> None:
+    def upsert(self, file_path: Path, chunks: list[Any], *, content_hash: str,
+               refresh_lexical: bool = True) -> None:
         with self._lock:
-            texts = [c.text for c in chunks]
-            embeddings = list(self._embedder.embed(texts)) if texts else []
-            previous = self._collection.get(where={"path": str(file_path.resolve())}, include=[])
-            if previous.get("ids"):
-                self._collection.delete(ids=previous["ids"])
-            ids = [hashlib.sha256(f"{file_path.resolve()}:{i}".encode("utf-8")).hexdigest() for i in range(len(texts))]
-            if ids:
-                self._collection.upsert(ids=ids, embeddings=[v.tolist() for v in embeddings], documents=texts,
-                    metadatas=[{"path": str(file_path.resolve()), "chunk_index": i} for i in range(len(texts))])
+            batch_size = max(1, int(self.settings["models"]["embeddings"].get("batch_size", 64)))
+            normalized = str(file_path.expanduser().resolve())
+            for start in range(0, len(chunks), batch_size):
+                batch = chunks[start:start + batch_size]
+                texts = [chunk.text for chunk in batch]
+                embeddings = list(self._embedder.embed(texts))
+                ids = [hashlib.sha256(
+                    f"{normalized}:{content_hash}:{index}".encode("utf-8")
+                ).hexdigest() for index in range(start, start + len(batch))]
+                self._collection.upsert(ids=ids, embeddings=[vector.tolist() for vector in embeddings],
+                    documents=texts, metadatas=[{"path": normalized, "chunk_index": i}
+                                                for i in range(start, start + len(batch))])
             if refresh_lexical:
                 self._refresh_bm25()
+
+    def delete_obsolete(self, file_path: str | Path, keep_ids: list[str]) -> None:
+        """Delete stale vectors only after their replacement is committed in SQLite."""
+        with self._lock:
+            normalized = str(Path(file_path).expanduser().resolve())
+            existing = self._collection.get(where={"path": normalized}, include=[]).get("ids", [])
+            keep = set(keep_ids)
+            obsolete = [chunk_id for chunk_id in existing if chunk_id not in keep]
+            if obsolete:
+                self._collection.delete(ids=obsolete)
 
     def delete(self, path: str | Path, *, refresh_lexical: bool = True) -> None:
         with self._lock:

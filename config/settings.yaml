@@ -34,6 +34,7 @@ models:
   embeddings:
     model: BAAI/bge-small-en-v1.5
     cache_dir: "~/.cache/filebot/fastembed"
+    batch_size: 64
   vector_store:
     path: "~/.filebot/chromadb"
 

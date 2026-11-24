@@ -238,7 +238,7 @@ class Database:
             file_id = int(connection.execute("SELECT file_id FROM files WHERE path=?", (normalized,)).fetchone()[0])
             connection.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
             for index, item in enumerate(chunks):
-                chunk_id = hashlib.sha256(f"{normalized}:{index}".encode("utf-8")).hexdigest()
+                chunk_id = hashlib.sha256(f"{normalized}:{content_hash}:{index}".encode("utf-8")).hexdigest()
                 connection.execute("""INSERT INTO chunks(chunk_id,file_id,chunk_index,page_or_line,heading,snippet,token_count,vector_id)
                     VALUES(?,?,?,?,?,?,?,?)""", (chunk_id,file_id,index,item.get("page_or_line"),item.get("heading"),
                     str(item.get("text", "")),len(str(item.get("text", "")).split()),chunk_id))
@@ -248,6 +248,16 @@ class Database:
         """Remove an indexed file and its dependent chunks and signals."""
         with self.connect() as connection:
             connection.execute("DELETE FROM files WHERE path=?", (str(Path(path).resolve()),))
+
+    def vector_ids_for_file(self, path: str | Path) -> list[str]:
+        """Return the committed vector identifiers for a normalized file path."""
+        normalized = str(Path(path).expanduser().resolve())
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id FROM chunks c JOIN files f USING(file_id) WHERE f.path=?",
+                (normalized,),
+            )
+            return [str(row[0]) for row in rows]
 
     def all_chunks(self) -> list[sqlite3.Row]:
         """Return chunk corpus records for the in-memory BM25 index."""

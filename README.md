@@ -36,7 +36,7 @@ For startup diagnostics, use `python .\app.pyw` from a console. FileBot also wri
 
 Watchdog records debounced file changes in SQLite using one bounded-memory debounce thread. It does not load an embedding model. Wake-up loads retrieval resources on a background thread and starts an indexing service that processes queued updates in bounded batches while awake. Search and indexing share a lock so vector and lexical state cannot be changed during a query. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
 
-The indexer intentionally handles only extensions listed in settings. Changing the roots or extensions does not automatically remove old database records; remove the database under `~/.filebot` if you want to rebuild from scratch.
+The indexer intentionally handles only extensions listed in settings. Embeddings are written in bounded batches controlled by `models.embeddings.batch_size` (64 by default), and stale vectors are removed only after the replacement chunk records are committed in SQLite. Changing the roots or extensions does not automatically remove old database records; remove the database under `~/.filebot` if you want to rebuild from scratch.
 
 ## CMD approval
 
