@@ -57,6 +57,7 @@ class LifecycleManager(QObject):
         self._waking = False
         self._cancel_wake = False
         self._busy = False
+        self._busy_count = 0
         self._sleep_requested = False
         self._shutting_down = False
         self._wake_worker: _WakeWorker | None = None
@@ -131,12 +132,16 @@ class LifecycleManager(QObject):
 
     def begin_work(self) -> None:
         """Suspend idle unload while an assistant request or approved command runs."""
+        self._busy_count += 1
         self._busy = True
         self.idle.stop()
 
     def end_work(self) -> None:
         """Resume the idle clock when active work finishes."""
-        self._busy = False
+        self._busy_count = max(0, self._busy_count - 1)
+        self._busy = self._busy_count > 0
+        if self._busy:
+            return
         if self._sleep_requested:
             self._finish_sleep()
         else:
@@ -174,6 +179,7 @@ class LifecycleManager(QObject):
         self.runtime = self.engine = self.popover = None
         self._active = False
         self._busy = False
+        self._busy_count = 0
         self._sleep_requested = False
         self.status_changed.emit("sleep")
 

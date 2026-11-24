@@ -87,15 +87,19 @@ class PopoverCard(QWidget):
         layout.addLayout(self.pending)
         self._task: _Task | None = None
         self._command_task: _CommandTask | None = None
+        self._command_queue: list[str] = []
         self._refresh_pending()
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
 
     def submit(self, force_search: bool = False) -> None:
+        if self._task is not None and self._task.isRunning():
+            return
         prompt = self.input.text().strip()
         if not prompt:
             return
         self.activity.emit()
+        self.input.setEnabled(False)
         self.search_button.setEnabled(False)
         self.ask_button.setEnabled(False)
         self.status_changed.emit("active")
@@ -105,6 +109,7 @@ class PopoverCard(QWidget):
         self._task.start()
 
     def _received(self, result: object, error: str) -> None:
+        self.input.setEnabled(True)
         self.search_button.setEnabled(True)
         self.ask_button.setEnabled(True)
         if error:
@@ -159,20 +164,49 @@ class PopoverCard(QWidget):
             self._refresh_pending()
             return
         if approved:
-            self.status_changed.emit("active")
-            self.work_started.emit()
-            self._command_task = _CommandTask(self.runner, proposal_id)
-            self._command_task.done.connect(self._command_received)
-            self._command_task.start()
+            self._command_queue.append(proposal_id)
+            if self._command_task is None:
+                self.status_changed.emit("active")
+                self._set_request_controls_enabled(False)
+                self.work_started.emit()
+                self._start_next_command()
         self._refresh_pending()
+
+    def _start_next_command(self) -> None:
+        if not self._command_queue:
+            self._command_task = None
+            self._set_request_controls_enabled(True)
+            self.work_finished.emit()
+            self._refresh_pending()
+            return
+        proposal_id = self._command_queue.pop(0)
+        task = _CommandTask(self.runner, proposal_id)
+        self._command_task = task
+        task.done.connect(self._command_received)
+        task.start()
 
     def _command_received(self, code: int, stdout: str, stderr: str, error: str) -> None:
         if error:
             self.answer.setPlainText(f"Could not run approved command: {error}")
         else:
             self.answer.setPlainText(f"Exit code: {code}\n{stdout}\n{stderr}".strip())
-        self._refresh_pending()
-        self.work_finished.emit()
+        task = self.sender()
+        if task is self._command_task:
+            self._command_task = None
+        if task is not None:
+            task.deleteLater()
+        if self._command_queue:
+            self._start_next_command()
+        else:
+            self._refresh_pending()
+            self._set_request_controls_enabled(True)
+            self.work_finished.emit()
+
+    def _set_request_controls_enabled(self, enabled: bool) -> None:
+        """Prevent a second agent request from racing an approved CMD action."""
+        self.input.setEnabled(enabled)
+        self.search_button.setEnabled(enabled)
+        self.ask_button.setEnabled(enabled)
 
     def stop_tasks(self) -> None:
         """Cancel active model work and wait for approved commands to be audited."""
@@ -186,4 +220,13 @@ class PopoverCard(QWidget):
             # CommandRunner has a bounded subprocess timeout; wait so its audit
             # record is finalized before the runtime and database are released.
             self._command_task.wait()
+            self._command_task = None
+        # These rows are already approved by the user's click. Finish them before
+        # shutdown so the audit log cannot leave an approved-but-unrun command.
+        while self._command_queue:
+            proposal_id = self._command_queue.pop(0)
+            try:
+                self.runner.execute(proposal_id)
+            except Exception:
+                log.exception("Could not finish an approved command during shutdown")
 

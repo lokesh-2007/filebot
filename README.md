@@ -50,7 +50,7 @@ Treat policy edits as security-sensitive. Keep installer, privilege, shell chain
 python -m unittest discover -s tests -v
 ```
 
-The Windows GitHub Actions workflow runs the unit suite on Python 3.11 and 3.12. It installs only the test-time YAML dependency; the full local model, vector database, and desktop UI stack is not needed for these unit tests.
+The Windows GitHub Actions workflow runs the unit suite on Python 3.11 and 3.12, including Qt lifecycle tests. It installs only the test-time YAML, watchdog, and PyQt6 dependencies; the local model and vector database are not needed for these unit tests.
 
 ## Data and privacy
 
