@@ -24,6 +24,8 @@ index:
 models:
   ollama:
     base_url: "http://127.0.0.1:11434"
+    # Nanobot's Ollama provider uses the OpenAI-compatible endpoint.
+    api_base: "http://127.0.0.1:11434/v1"
     model: qwen2.5-coder:3b
     # Ollama accepts 0 to unload immediately or a duration such as 2m.
     keep_alive: "0"
@@ -36,4 +38,3 @@ models:
 runtime:
   idle_unload_seconds: 120
   hotkey: "<ctrl>+<alt>+space"
-
