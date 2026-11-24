@@ -5,6 +5,28 @@ on:
   pull_request:
 
 jobs:
+  production-dependencies:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install production requirements
+        run: python -m pip install -r requirements.txt
+      - name: Check dependency consistency
+        run: python -m pip check
+      - name: Import lazy runtime dependencies
+        run: >-
+          python -c "import bm25s, chromadb, docx, fastembed, fitz, nanobot, ollama, PyQt6, watchdog, yaml"
+      - name: Verify Chroma persistent client shutdown
+        run: |
+          python -c "import tempfile; from pathlib import Path; import chromadb; d=tempfile.TemporaryDirectory(); client=chromadb.PersistentClient(path=d.name); client.get_or_create_collection('filebot_ci_smoke'); client.close(); d.cleanup(); print('Chroma client closed and temporary database removed')"
+
   unit-tests:
     runs-on: windows-latest
     strategy:
