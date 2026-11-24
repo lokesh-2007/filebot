@@ -13,10 +13,10 @@ FileBot is a local Windows file search assistant with a small always-on avatar a
 From the repository folder in PowerShell:
 
 ```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+.\scripts\setup.ps1
+# Or add -DownloadModel to also pull the roughly 2 GB Ollama model:
+.\scripts\setup.ps1 -DownloadModel
+# Or download it later with:
 ollama pull qwen2.5-coder:3b
 ```
 
@@ -24,13 +24,13 @@ The FastEmbed embedding model is downloaded on the first wake into the cache dir
 
 Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, and `keep_alive`. Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
 
-Start FileBot with:
+Start FileBot hidden in the signed-in desktop session with:
 
 ```powershell
-pythonw .\app.pyw
+.\scripts\start.ps1
 ```
 
-For startup diagnostics, use `python .\app.pyw` from a console. FileBot also writes rotating logs to `~/.filebot/logs/filebot.log`. Keep FileBot in the signed-in desktop session so the avatar and global hotkey can receive input.
+For startup diagnostics, run `.\scripts\start.ps1 -Console`. FileBot also writes rotating logs to `~/.filebot/logs/filebot.log`. Keep FileBot in the signed-in desktop session so the avatar and global hotkey can receive input.
 
 ## Search and indexing
 
