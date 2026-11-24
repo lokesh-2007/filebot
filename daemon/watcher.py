@@ -5,6 +5,7 @@ import logging
 import threading
 import os
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ class _DebouncedHandler(FileSystemEventHandler):
         self.db, self.delay, self.extensions, self.excluded = db, delay, extensions, excluded
         self._condition = threading.Condition()
         self._pending: dict[str, tuple[str, float]] = {}
-        self._directory_jobs: list[tuple[str, str]] = []
+        self._directory_jobs: deque[tuple[str, str]] = deque()
         self._closed = False
         self._thread = threading.Thread(target=self._flush_loop, name="FileBotDebounceQueue", daemon=True)
         self._thread.start()
@@ -58,7 +59,7 @@ class _DebouncedHandler(FileSystemEventHandler):
             if operation == "delete":
                 paths = self.db.paths_under(target)
                 for start in range(0, len(paths), 500):
-                    self.db.enqueue_dirty_many([(item, "delete") for item in paths[start:start + 500]])
+                    self._enqueue_batch([(item, "delete") for item in paths[start:start + 500]])
                 return
             if not target.is_dir():
                 return
@@ -70,12 +71,26 @@ class _DebouncedHandler(FileSystemEventHandler):
                     if file.suffix.lower() in self.extensions:
                         batch.append((str(file), "upsert"))
                         if len(batch) >= 500:
-                            self.db.enqueue_dirty_many(batch)  # type: ignore[arg-type]
+                            self._enqueue_batch(batch)
                             batch.clear()
             if batch:
-                self.db.enqueue_dirty_many(batch)  # type: ignore[arg-type]
+                self._enqueue_batch(batch)
         except Exception:
             log.exception("Could not queue directory event for %s", path)
+
+    def _enqueue_batch(self, events: list[tuple[str, str]]) -> None:
+        """Persist a batch efficiently, falling back to individual retryable writes."""
+        if not events:
+            return
+        try:
+            self.db.enqueue_dirty_many(events)  # type: ignore[arg-type]
+        except Exception:
+            log.exception("Could not queue a %d-file scan batch; retrying events individually", len(events))
+            for path, operation in events:
+                try:
+                    self.db.enqueue_dirty(path, operation)  # type: ignore[arg-type]
+                except Exception:
+                    log.exception("Could not queue filesystem path %s", path)
 
     def _flush_loop(self) -> None:
         while True:
@@ -84,7 +99,7 @@ class _DebouncedHandler(FileSystemEventHandler):
                     self._condition.wait()
                 if self._closed and not self._pending and not self._directory_jobs:
                     return
-                directory_job = self._directory_jobs.pop(0) if self._directory_jobs else None
+                directory_job = self._directory_jobs.popleft() if self._directory_jobs else None
                 if directory_job is not None:
                     events: list[tuple[str, str]] = []
                     remaining = 0.0
@@ -105,8 +120,7 @@ class _DebouncedHandler(FileSystemEventHandler):
                 self._process_directory(*directory_job)
                 continue
             try:
-                if events:
-                    self.db.enqueue_dirty_many(events)  # type: ignore[arg-type]
+                self._enqueue_batch(events)
             except Exception:
                 log.exception("Could not queue filesystem event batch")
                 with self._condition:
@@ -181,32 +195,40 @@ class FileWatcher:
 
     def _seed_existing(self) -> None:
         """Queue existing supported files without parsing or loading models."""
+        batch: list[tuple[str, str]] = []
         for root in self.roots:
             if not root.is_dir():
                 continue
             for current, dirs, files in os.walk(root):
                 if self._scan_stop.is_set():
+                    if batch:
+                        self.handler._enqueue_batch(batch)
                     return
                 dirs[:] = [name for name in dirs if name.lower() not in self.handler.excluded]
                 for name in files:
                     if self._scan_stop.is_set():
+                        if batch:
+                            self.handler._enqueue_batch(batch)
                         return
                     path = Path(current) / name
                     if path.suffix.lower() in self.handler.extensions:
-                        try:
-                            self.handler.db.enqueue_dirty(path, "upsert")
-                        except Exception:
-                            log.exception("Could not queue initial scan file %s", path)
+                        batch.append((str(path), "upsert"))
+                        if len(batch) >= 500:
+                            self.handler._enqueue_batch(batch)
+                            batch = []
+        if batch and not self._scan_stop.is_set():
+            self.handler._enqueue_batch(batch)
 
     def stop(self) -> None:
         if self._stopped:
             return
         self._stopped = True
         self._scan_stop.set()
-        self.handler.close()
         if self.observer.is_alive():
             self.observer.stop()
             self.observer.join(timeout=5)
         if self._scan_thread is not None:
             self._scan_thread.join(timeout=5)
+        # Stop producers first, then flush the final debounced events.
+        self.handler.close()
 

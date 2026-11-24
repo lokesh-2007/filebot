@@ -1,3 +1,4 @@
+
 """Filesystem watcher debounce and shutdown behavior tests."""
 from __future__ import annotations
 
@@ -5,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from watchdog.events import DirCreatedEvent, DirDeletedEvent, FileCreatedEvent
 
@@ -16,6 +18,45 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FileWatcherTests(unittest.TestCase):
+    def test_stop_stops_event_producer_before_flushing_debounce_queue(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            root = Path(directory)
+            db = Database(root / "state.sqlite3")
+            db.initialize()
+
+            class EmittingObserver:
+                def __init__(self) -> None:
+                    self.handler = None
+                    self.alive = False
+
+                def schedule(self, handler, path, recursive=True) -> None:
+                    self.handler = handler
+
+                def start(self) -> None:
+                    self.alive = True
+
+                def is_alive(self) -> bool:
+                    return self.alive
+
+                def stop(self) -> None:
+                    assert self.handler is not None
+                    self.handler.on_created(FileCreatedEvent(str(root / "last-event.txt")))
+                    self.alive = False
+
+                def join(self, timeout=None) -> None:
+                    pass
+
+            with patch("daemon.watcher.Observer", EmittingObserver):
+                watcher = FileWatcher({"index": {
+                    "roots": [str(root)], "include_extensions": [".txt"], "exclude_dirs": [],
+                    "debounce_seconds": 10.0,
+                }}, db)
+                watcher.start()
+                watcher.stop()
+
+            rows = db.pending_dirty()
+            self.assertEqual([row["path"] for row in rows], [str((root / "last-event.txt").resolve())])
+
     def test_debounce_queues_supported_file_and_ignores_events_after_close(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             root = Path(directory)
