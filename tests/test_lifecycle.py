@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from daemon.lifecycle_manager import LifecycleManager
+from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
 
 
@@ -34,6 +35,13 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(manager._busy)
         self.assertTrue(manager.idle.isActive())
         manager.idle.stop()
+
+    def test_avatar_exposes_a_named_status_window(self) -> None:
+        avatar = AvatarBubble()
+        self.assertEqual(avatar.windowTitle(), "FileBot")
+        self.assertEqual(avatar.accessibleName(), "FileBot status avatar")
+        self.assertEqual(avatar.label.accessibleName(), "FileBot status")
+        avatar.close()
 
     def test_approved_commands_run_in_order_one_at_a_time(self) -> None:
         class FakeDatabase:

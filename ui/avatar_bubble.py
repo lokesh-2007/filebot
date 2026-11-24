@@ -12,9 +12,13 @@ class AvatarBubble(QWidget):
 
     def __init__(self) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowTitle("FileBot")
+        self.setAccessibleName("FileBot status avatar")
+        self.setAccessibleDescription("Click to open FileBot local search and command approval.")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(58, 58)
         self.label = QLabel("FB", self)
+        self.label.setAccessibleName("FileBot status")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setGeometry(2, 2, 54, 54)
         self.label.setStyleSheet("background:#4936a5;color:white;border:2px solid #b9acff;border-radius:27px;font-weight:700;font-size:16px")
@@ -66,3 +70,4 @@ class AvatarBubble(QWidget):
             else:
                 self.toggled.emit()
             self._offset = None
+
