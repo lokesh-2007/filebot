@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from filebot_config import expand_config_path, load_settings
 
 
@@ -25,6 +27,21 @@ class ConfigTests(unittest.TestCase):
             path = Path(directory) / "settings.yaml"
             path.write_text("app: {}\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "section 'index'"):
+                load_settings(path)
+
+    def test_invalid_index_bounds_fail_during_configuration_load(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["index"]["chunk_overlap"] = settings["index"]["chunk_chars"]
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "chunk_overlap.*smaller"):
+                load_settings(path)
+
+            settings["index"]["chunk_overlap"] = 100
+            settings["models"]["embeddings"]["batch_size"] = "many"
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "models.embeddings.batch_size.*integer"):
                 load_settings(path)
 
 
