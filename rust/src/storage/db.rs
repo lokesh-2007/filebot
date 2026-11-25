@@ -792,16 +792,7 @@ fn normalize_path(path: &Path) -> Result<String, StorageError> {
     // Resolve existing aliases (including Windows 8.3 short names) before using
     // paths as SQLite keys. For a deleted file, canonicalize its parent and join
     // the missing name so watcher and parser paths converge on one key.
-    let resolved = if absolute.exists() {
-        absolute.canonicalize().unwrap_or_else(|_| absolute.clone())
-    } else if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
-        parent
-            .canonicalize()
-            .map(|parent| parent.join(name))
-            .unwrap_or_else(|_| absolute.clone())
-    } else {
-        absolute.clone()
-    };
+    let resolved = resolve_path_aliases(&absolute);
     let mut normalized = PathBuf::new();
     for component in resolved.components() {
         match component {
@@ -825,6 +816,33 @@ fn normalize_path(path: &Path) -> Result<String, StorageError> {
     } else {
         Ok(value)
     }
+}
+
+fn resolve_path_aliases(absolute: &Path) -> PathBuf {
+    if absolute.exists() {
+        return absolute
+            .canonicalize()
+            .unwrap_or_else(|_| absolute.to_path_buf());
+    }
+    let mut ancestor = absolute;
+    let mut suffix = Vec::new();
+    while !ancestor.exists() {
+        let Some(name) = ancestor.file_name() else {
+            return absolute.to_path_buf();
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return absolute.to_path_buf();
+        };
+        ancestor = parent;
+    }
+    let mut resolved = ancestor
+        .canonicalize()
+        .unwrap_or_else(|_| ancestor.to_path_buf());
+    for name in suffix.into_iter().rev() {
+        resolved.push(name);
+    }
+    resolved
 }
 
 fn tail_chars(value: &str, limit: usize) -> String {

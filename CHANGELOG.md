@@ -94,6 +94,17 @@ versions may still change behavior while the Windows release is stabilized.
 - Correct Windows path assertions and retain a saturation-path regression test.
 - Verified with 50 Rust tests, formatting, and warning-free clippy on Windows.
 
+## Rust migration core 0.9.0 — 2026-11-25
+
+- Expose per-turn preflight, first-token, total elapsed time, and response-size
+  metrics to the future UI without retaining or logging prompt text.
+- Resolve Windows short-name aliases even for missing nested paths by
+  canonicalizing the nearest existing ancestor before building the SQLite key.
+- Keep cancellation and timing instrumentation in the same streaming path so
+  response latency can be measured from real use rather than guessed.
+- Verified with 50 Rust tests, formatting, and warning-free clippy. Product UI
+  integration and on-device latency/RAM benchmarks remain next.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

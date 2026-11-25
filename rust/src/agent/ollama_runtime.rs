@@ -12,7 +12,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 
@@ -43,6 +43,15 @@ pub enum AgentError {
     Proposal(String),
     #[error("file operation failed: {0}")]
     FileOperation(String),
+}
+
+/// Per-turn timing data for latency tuning without storing prompts or responses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnMetrics {
+    pub total: Duration,
+    pub model_preflight: Duration,
+    pub time_to_first_token: Option<Duration>,
+    pub response_chars: usize,
 }
 
 /// Transport abstraction keeps chat-turn policy testable without a live model.
@@ -454,8 +463,19 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
     pub fn ask_streaming(
         &mut self,
         prompt: &str,
-        mut on_delta: impl FnMut(&str) -> bool,
+        on_delta: impl FnMut(&str) -> bool,
     ) -> Result<String, AgentError> {
+        self.ask_streaming_profiled(prompt, on_delta)
+            .map(|(answer, _metrics)| answer)
+    }
+
+    /// Run a turn and return timing metrics for UI diagnostics and tuning.
+    pub fn ask_streaming_profiled(
+        &mut self,
+        prompt: &str,
+        mut on_delta: impl FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        let turn_started = Instant::now();
         let prompt = prompt.trim();
         if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(ConfigError::Invalid(
@@ -463,7 +483,10 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
             )
             .into());
         }
+        let preflight_started = Instant::now();
         self.transport.check_model(&self.model)?;
+        let model_preflight = preflight_started.elapsed();
+        let mut time_to_first_token = None;
         let intent = self.router.route(prompt);
         let schemas = tool_schemas(intent);
         let allowed = offered_tool_names(&schemas);
@@ -478,9 +501,13 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
             let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":should_stream,"keep_alive":self.keep_alive,"options":{"num_ctx":self.num_ctx,"num_predict":self.num_predict}});
             // Ollama may load a model before a request times out or fails decoding.
             self.model_loaded = true;
-            let response = self
-                .transport
-                .chat_stream(&request, should_stream, &mut on_delta)?;
+            let mut report_delta = |delta: &str| {
+                time_to_first_token.get_or_insert_with(|| turn_started.elapsed());
+                on_delta(delta)
+            };
+            let response =
+                self.transport
+                    .chat_stream(&request, should_stream, &mut report_delta)?;
             let mut message = response
                 .get("message")
                 .cloned()
@@ -522,7 +549,13 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
                 self.remember(json!({"role":"user","content":prompt}));
                 self.remember(json!({"role":"assistant","content":answer}));
                 self.model_loaded = true;
-                return Ok(answer);
+                let metrics = TurnMetrics {
+                    total: turn_started.elapsed(),
+                    model_preflight,
+                    time_to_first_token,
+                    response_chars: answer.chars().count(),
+                };
+                return Ok((answer, metrics));
             }
             messages.push(message);
             for (id, name, arguments) in calls {
@@ -802,8 +835,8 @@ mod tests {
         let requests = Arc::clone(&transport.requests);
         let mut runtime = BotRuntime::new(&settings(), transport, MockTools::default()).unwrap();
         let mut deltas = Vec::new();
-        let answer = runtime
-            .ask_streaming("Explain local indexing", |delta| {
+        let (answer, metrics) = runtime
+            .ask_streaming_profiled("Explain local indexing", |delta| {
                 deltas.push(delta.to_owned());
                 true
             })
@@ -813,6 +846,9 @@ mod tests {
         assert_eq!(requests.lock().unwrap()[0]["stream"], true);
         assert_eq!(requests.lock().unwrap()[0]["options"]["num_ctx"], 4096);
         assert_eq!(requests.lock().unwrap()[0]["options"]["num_predict"], 256);
+        assert!(metrics.total >= metrics.model_preflight);
+        assert!(metrics.time_to_first_token.is_some());
+        assert_eq!(metrics.response_chars, 13);
     }
 
     #[test]

@@ -5,3 +5,4 @@ pub mod ollama_runtime;
 pub mod tools;
 
 pub use fast_router::{FastRouter, Intent};
+pub use ollama_runtime::TurnMetrics;

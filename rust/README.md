@@ -37,6 +37,8 @@ crate as a replacement desktop app yet.
   defaults cap context at 4096 tokens, output at 256 tokens, and embedding
   batches at 16 chunks. A 2-minute keep-alive warms back-to-back turns, while
   lifecycle sleep explicitly unloads the model.
+- Turn diagnostics expose preflight time, time-to-first-token, total latency,
+  and response length without recording prompt or response text.
 - The always-on watcher caps its event channel and debounce map; overflow events
   are persisted directly to SQLite rather than growing memory without bound.
 - Unsafe Rust is forbidden in the core crate.

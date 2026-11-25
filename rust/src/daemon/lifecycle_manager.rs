@@ -1,4 +1,5 @@
 //! Small wake/idle coordinator for the model-backed assistant.
+use crate::agent::TurnMetrics;
 use crate::agent::ollama_runtime::{AgentError, AgentTools, BotRuntime, OllamaTransport};
 use std::{
     sync::{
@@ -24,6 +25,11 @@ pub trait ManagedAssistant: Send + 'static {
         prompt: &str,
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> Result<String, AgentError>;
+    fn ask_streaming_profiled(
+        &mut self,
+        prompt: &str,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError>;
     fn sleep(&mut self);
 }
 
@@ -38,6 +44,14 @@ where
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> Result<String, AgentError> {
         BotRuntime::ask_streaming(self, prompt, on_delta)
+    }
+
+    fn ask_streaming_profiled(
+        &mut self,
+        prompt: &str,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        BotRuntime::ask_streaming_profiled(self, prompt, on_delta)
     }
 
     fn sleep(&mut self) {
@@ -127,15 +141,25 @@ impl<A: ManagedAssistant> LifecycleManager<A> {
     pub fn ask_streaming(
         &self,
         prompt: &str,
-        mut on_delta: impl FnMut(&str) -> bool,
+        on_delta: impl FnMut(&str) -> bool,
     ) -> Result<String, AgentError> {
+        self.ask_streaming_profiled(prompt, on_delta)
+            .map(|(answer, _metrics)| answer)
+    }
+
+    /// Run a turn and return timing data without retaining prompt or response text.
+    pub fn ask_streaming_profiled(
+        &self,
+        prompt: &str,
+        mut on_delta: impl FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
         self.wake();
         let result = {
             let mut assistant = self
                 .assistant
                 .lock()
                 .map_err(|_| AgentError::Response("assistant lock was poisoned".into()))?;
-            assistant.ask_streaming(prompt, &mut on_delta)
+            assistant.ask_streaming_profiled(prompt, &mut on_delta)
         };
         self.wake();
         result
@@ -206,6 +230,22 @@ mod tests {
             self.asks.fetch_add(1, Ordering::Relaxed);
             let _ = on_delta(prompt);
             Ok("ok".into())
+        }
+        fn ask_streaming_profiled(
+            &mut self,
+            prompt: &str,
+            on_delta: &mut dyn FnMut(&str) -> bool,
+        ) -> Result<(String, TurnMetrics), AgentError> {
+            let answer = self.ask_streaming(prompt, on_delta)?;
+            Ok((
+                answer,
+                TurnMetrics {
+                    total: Duration::from_millis(1),
+                    model_preflight: Duration::from_millis(1),
+                    time_to_first_token: Some(Duration::from_millis(1)),
+                    response_chars: 2,
+                },
+            ))
         }
         fn sleep(&mut self) {
             self.sleeps.fetch_add(1, Ordering::Relaxed);
