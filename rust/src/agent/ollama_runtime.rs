@@ -402,6 +402,8 @@ impl AgentTools for FileBotTools {
 pub struct BotRuntime<T: OllamaTransport, A: AgentTools> {
     model: String,
     keep_alive: String,
+    num_ctx: u32,
+    num_predict: u32,
     router: FastRouter,
     transport: T,
     tools: A,
@@ -414,15 +416,25 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
     pub fn new(settings: &Settings, transport: T, tools: A) -> Result<Self, AgentError> {
         let model = settings.models.ollama.model.trim().to_owned();
         let keep_alive = settings.models.ollama.keep_alive.trim().to_owned();
+        let num_ctx = settings.models.ollama.num_ctx;
+        let num_predict = settings.models.ollama.num_predict;
         if model.is_empty() || model.chars().count() > 256 {
             return Err(ConfigError::Invalid("Ollama model name is invalid".into()).into());
         }
         if keep_alive.is_empty() || keep_alive.chars().count() > 32 {
             return Err(ConfigError::Invalid("Ollama keep_alive value is invalid".into()).into());
         }
+        if !(512..=32_768).contains(&num_ctx) || !(1..=4096).contains(&num_predict) {
+            return Err(ConfigError::Invalid(
+                "Ollama inference limits are outside their safe bounds".into(),
+            )
+            .into());
+        }
         Ok(Self {
             model,
             keep_alive,
+            num_ctx,
+            num_predict,
             router: FastRouter,
             transport,
             tools,
@@ -463,7 +475,7 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
 
         for _ in 0..MAX_TOOL_ROUNDS {
             let should_stream = intent == Intent::Chat;
-            let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":should_stream,"keep_alive":self.keep_alive});
+            let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":should_stream,"keep_alive":self.keep_alive,"options":{"num_ctx":self.num_ctx,"num_predict":self.num_predict}});
             // Ollama may load a model before a request times out or fails decoding.
             self.model_loaded = true;
             let response = self
@@ -545,7 +557,9 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
     pub fn sleep(&mut self) {
         self.tools.deactivate();
         if self.model_loaded {
-            let _ = self.transport.unload(&self.model, &self.keep_alive);
+            // `keep_alive` controls warm reuse between active turns. Sleeping is a
+            // separate low-RAM boundary and always asks Ollama to release the model.
+            let _ = self.transport.unload(&self.model, "0");
         }
         self.model_loaded = false;
     }
@@ -693,6 +707,7 @@ mod tests {
         responses: Arc<Mutex<Vec<Value>>>,
         requests: Arc<Mutex<Vec<Value>>>,
         unloads: Arc<AtomicUsize>,
+        unload_keep_alive: Arc<Mutex<Vec<String>>>,
     }
 
     impl OllamaTransport for MockTransport {
@@ -706,8 +721,12 @@ mod tests {
             }
             Ok(self.responses.lock().unwrap().remove(0))
         }
-        fn unload(&mut self, _model: &str, _keep_alive: &str) -> Result<(), AgentError> {
+        fn unload(&mut self, _model: &str, keep_alive: &str) -> Result<(), AgentError> {
             self.unloads.fetch_add(1, Ordering::Relaxed);
+            self.unload_keep_alive
+                .lock()
+                .unwrap()
+                .push(keep_alive.to_owned());
             Ok(())
         }
     }
@@ -792,6 +811,8 @@ mod tests {
         assert_eq!(answer, "Hello locally");
         assert_eq!(deltas, ["Hello locally"]);
         assert_eq!(requests.lock().unwrap()[0]["stream"], true);
+        assert_eq!(requests.lock().unwrap()[0]["options"]["num_ctx"], 4096);
+        assert_eq!(requests.lock().unwrap()[0]["options"]["num_predict"], 256);
     }
 
     #[test]
@@ -859,6 +880,25 @@ mod tests {
         assert!(answer.starts_with("No command was executed."));
         runtime.sleep();
         assert_eq!(unload_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn keep_alive_warms_active_turns_but_sleep_requests_immediate_unload() {
+        let transport = MockTransport {
+            responses: Arc::new(Mutex::new(vec![final_response("Warm reply")])),
+            ..Default::default()
+        };
+        let requests = Arc::clone(&transport.requests);
+        let unload_values = Arc::clone(&transport.unload_keep_alive);
+        let mut config = settings();
+        config.models.ollama.keep_alive = "2m".into();
+        let mut runtime = BotRuntime::new(&config, transport, MockTools::default()).unwrap();
+
+        runtime.ask("hello").unwrap();
+        runtime.sleep();
+
+        assert_eq!(requests.lock().unwrap()[0]["keep_alive"], "2m");
+        assert_eq!(unload_values.lock().unwrap().as_slice(), &["0"]);
     }
 
     #[test]

@@ -33,6 +33,12 @@ crate as a replacement desktop app yet.
   SQLite index membership. The agent has no shell execution or file-write tool.
 - A low-cost lifecycle supervisor starts dormant, handles wake/streamed turns,
   and unloads model resources after the configured idle interval.
+- Ollama context/generation limits and embedding batch size are configurable;
+  defaults cap context at 4096 tokens, output at 256 tokens, and embedding
+  batches at 16 chunks. A 2-minute keep-alive warms back-to-back turns, while
+  lifecycle sleep explicitly unloads the model.
+- The always-on watcher caps its event channel and debounce map; overflow events
+  are persisted directly to SQLite rather than growing memory without bound.
 - Unsafe Rust is forbidden in the core crate.
 
 Build and run the Rust core tests from the repository root with Rust 1.92 or newer:

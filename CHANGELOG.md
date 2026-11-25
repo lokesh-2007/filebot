@@ -73,6 +73,19 @@ versions may still change behavior while the Windows release is stabilized.
 - Verified with 47 Rust tests, locked dependencies, formatting, and warning-free
   clippy. Native UI wiring and live Ollama checks remain outstanding.
 
+## Rust migration core 0.8.0 — 2026-11-25
+
+- Bound the always-on watcher channel to 2048 events and its debounce map to
+  4096 paths. Saturation persists events through the SQLite dirty queue instead
+  of allowing an unbounded in-memory backlog.
+- Add configurable Ollama context and response-token limits (4096/256 defaults)
+  and reduce embedding batches from 64 to 16 for lower transient RAM use.
+- Keep the model warm for 2 minutes between active turns by default, then send
+  an immediate unload request at lifecycle sleep to avoid retaining model RAM.
+- Verified with 50 Rust tests, locked dependencies, formatting, and warning-free
+  clippy. Measure real Windows latency/RAM and resolve the CI check before
+  calling these defaults validated.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

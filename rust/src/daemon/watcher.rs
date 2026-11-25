@@ -11,7 +11,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -19,6 +19,8 @@ use std::{
 use thiserror::Error;
 
 const MAX_QUEUE_BATCH: usize = 500;
+const MAX_WATCH_EVENTS: usize = 2048;
+const MAX_PENDING_PATHS: usize = 4096;
 const EVENT_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Error)]
@@ -85,10 +87,12 @@ impl WatchService {
             debounce: Duration::from_secs_f64(index.debounce_seconds),
         };
 
-        let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
+        let (event_tx, event_rx) = mpsc::sync_channel::<notify::Result<Event>>(MAX_WATCH_EVENTS);
+        let overflow_db = db.clone();
+        let overflow_config = config.clone();
         let mut watcher = RecommendedWatcher::new(
             move |event| {
-                let _ = event_tx.send(event);
+                persist_when_full(event, &event_tx, &overflow_db, &overflow_config);
             },
             NotifyConfig::default(),
         )?;
@@ -189,6 +193,20 @@ fn handle_event_result(
     }
 }
 
+/// Keep the watcher callback channel bounded; persist overflow directly to SQLite.
+fn persist_when_full(
+    event: notify::Result<Event>,
+    sender: &SyncSender<notify::Result<Event>>,
+    db: &Database,
+    config: &WatchConfig,
+) {
+    if let Err(TrySendError::Full(event)) = sender.try_send(event) {
+        let mut pending = HashMap::with_capacity(8);
+        handle_event_result(event, &mut pending, db, config);
+        flush_paths(&mut pending, db, config, true);
+    }
+}
+
 fn queue_event(
     event: Event,
     pending: &mut HashMap<PathBuf, PendingPath>,
@@ -217,6 +235,9 @@ fn queue_event(
                     .unwrap_or(false));
         if !directory && !has_supported_extension(&path, config) {
             continue;
+        }
+        if !pending.contains_key(&path) && pending.len() >= MAX_PENDING_PATHS {
+            flush_paths(pending, db, config, true);
         }
         pending.insert(
             path,
@@ -417,6 +438,33 @@ mod tests {
             DirtyOperation::Upsert,
             &config
         ));
+    }
+
+    #[test]
+    fn saturated_event_channel_persists_the_overflow_event_to_sqlite() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("docs");
+        fs::create_dir_all(&root).unwrap();
+        let queued = root.join("overflow.txt");
+        fs::write(&queued, "durable event").unwrap();
+        let config = config(&root);
+        let db = Database::new(temp.path().join("filebot.db"));
+        db.initialize().unwrap();
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        sender
+            .try_send(Ok(Event::new(notify::EventKind::Any)))
+            .unwrap();
+        let event = Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+            .add_path(queued.clone());
+
+        persist_when_full(Ok(event), &sender, &db, &config);
+
+        let dirty = db.pending_dirty(10).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(
+            dirty[0].path.to_ascii_lowercase(),
+            queued.to_string_lossy().to_ascii_lowercase()
+        );
     }
 
     #[test]

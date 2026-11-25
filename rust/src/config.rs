@@ -77,6 +77,10 @@ pub struct OllamaSettings {
     pub model: String,
     #[serde(default = "default_keep_alive")]
     pub keep_alive: String,
+    #[serde(default = "default_num_ctx")]
+    pub num_ctx: u32,
+    #[serde(default = "default_num_predict")]
+    pub num_predict: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -165,6 +169,13 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
             "Ollama model and URL must be configured".into(),
         ));
     }
+    if !(512..=32_768).contains(&settings.models.ollama.num_ctx)
+        || !(1..=4096).contains(&settings.models.ollama.num_predict)
+    {
+        return Err(ConfigError::Invalid(
+            "Ollama num_ctx must be 512..32768 and num_predict 1..4096".into(),
+        ));
+    }
     if settings.models.embeddings.model.trim().is_empty()
         || settings.models.embeddings.batch_size == 0
     {
@@ -241,6 +252,12 @@ fn default_log_level() -> String {
 fn default_keep_alive() -> String {
     "0".into()
 }
+fn default_num_ctx() -> u32 {
+    4096
+}
+fn default_num_predict() -> u32 {
+    256
+}
 fn default_max_file_bytes() -> u64 {
     50 * 1024 * 1024
 }
@@ -284,6 +301,8 @@ mod tests {
         assert_eq!(settings.models.ollama.model, "qwen2.5-coder:3b");
         assert_eq!(settings.index.max_file_bytes, 50 * 1024 * 1024);
         assert_eq!(settings.runtime.idle_unload_seconds, 120);
+        assert_eq!(settings.models.ollama.num_ctx, 4096);
+        assert_eq!(settings.models.ollama.num_predict, 256);
     }
 
     #[test]
@@ -291,6 +310,17 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/settings.yaml");
         let mut settings = load_settings(path).unwrap();
         settings.index.chunk_overlap = settings.index.chunk_chars;
+        assert!(validate(&settings).is_err());
+    }
+
+    #[test]
+    fn rejects_unbounded_ollama_context_and_generation_limits() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/settings.yaml");
+        let mut settings = load_settings(path).unwrap();
+        settings.models.ollama.num_ctx = 100_000;
+        assert!(validate(&settings).is_err());
+        settings.models.ollama.num_ctx = 4096;
+        settings.models.ollama.num_predict = 10_000;
         assert!(validate(&settings).is_err());
     }
 
