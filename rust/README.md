@@ -17,8 +17,9 @@ crate as a replacement desktop app yet.
 - Default-deny policy parsing from the existing `config/cmd_policy.yaml`, a
   proposal-only tool, live policy rechecks, and a bounded Windows CMD runner.
 - Deterministic command/search/open/chat intent routing.
-- Bounded TXT/Markdown chunking and transactional file/chunk replacement,
-  deletion, and parameterized SQLite lexical search.
+- Bounded TXT/Markdown/PDF/DOCX parsing and a dirty-queue drain with SHA-256
+  revision checks, configured-root enforcement, retry handling, and transactional
+  SQLite chunk storage plus lexical search.
 - Unsafe Rust is forbidden in the core crate.
 
 Build and run the Rust core tests from the repository root:
@@ -34,7 +35,7 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 
 1. Add in-place migration tests against a copy of a real 0.6.x database. Keep
    the existing database usable throughout the port.
-2. Port bounded TXT/Markdown, PDF, DOCX, and source-code parsing and indexing.
+2. Add source-code parsing and test real 0.6.x database migration in place.
 3. Port hybrid retrieval. Keep model construction behind an explicit wake
    boundary; use SQLite FTS5 plus a local vector store unless benchmarks show a
    better fully embedded Rust option.

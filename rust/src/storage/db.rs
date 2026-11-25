@@ -294,20 +294,31 @@ impl Database {
             .unwrap_or_default();
         let connection = self.connect()?;
         let tx = connection.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO files(path,file_name,ext,content_hash,size_bytes,mtime,chunk_count,status,last_indexed,error) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,'indexed',?8,NULL) \
-             ON CONFLICT(path) DO UPDATE SET file_name=excluded.file_name,ext=excluded.ext, \
-             content_hash=excluded.content_hash,size_bytes=excluded.size_bytes,mtime=excluded.mtime, \
-             chunk_count=excluded.chunk_count,status='indexed',last_indexed=excluded.last_indexed,error=NULL",
-            params![normalized, file_name, ext, content_hash, size_bytes.min(i64::MAX as u64) as i64,
-                modified_seconds, chunks.len().min(i64::MAX as usize) as i64, unix_time()?],
-        )?;
-        let file_id: i64 = tx.query_row(
-            "SELECT file_id FROM files WHERE path=?1",
-            [&normalized],
-            |row| row.get(0),
-        )?;
+        let file_id = tx
+            .query_row(
+                "SELECT file_id FROM files WHERE path=?1 COLLATE NOCASE",
+                [&normalized],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let indexed_at = unix_time()?;
+        let size = size_bytes.min(i64::MAX as u64) as i64;
+        let chunk_count = chunks.len().min(i64::MAX as usize) as i64;
+        let file_id = if let Some(file_id) = file_id {
+            tx.execute(
+                "UPDATE files SET path=?1,file_name=?2,ext=?3,content_hash=?4,size_bytes=?5,mtime=?6, \
+                 chunk_count=?7,status='indexed',last_indexed=?8,error=NULL WHERE file_id=?9",
+                params![normalized,file_name,ext,content_hash,size,modified_seconds,chunk_count,indexed_at,file_id],
+            )?;
+            file_id
+        } else {
+            tx.execute(
+                "INSERT INTO files(path,file_name,ext,content_hash,size_bytes,mtime,chunk_count,status,last_indexed,error) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,'indexed',?8,NULL)",
+                params![normalized,file_name,ext,content_hash,size,modified_seconds,chunk_count,indexed_at],
+            )?;
+            tx.last_insert_rowid()
+        };
         tx.execute("DELETE FROM chunks WHERE file_id=?1", [file_id])?;
         for (index, chunk) in chunks.iter().enumerate() {
             let chunk_id = Uuid::new_v4().to_string();
@@ -326,7 +337,10 @@ impl Database {
     pub fn delete_file(&self, path: impl AsRef<Path>) -> Result<bool, StorageError> {
         let normalized = normalize_path(path.as_ref())?;
         let connection = self.connect()?;
-        Ok(connection.execute("DELETE FROM files WHERE path=?1", [normalized])? > 0)
+        Ok(connection.execute(
+            "DELETE FROM files WHERE path=?1 COLLATE NOCASE",
+            [normalized],
+        )? > 0)
     }
 
     /// Search indexed paths and snippets using parameterized substring matches.
@@ -603,7 +617,16 @@ fn normalize_path(path: &Path) -> Result<String, StorageError> {
     if !normalized.is_absolute() {
         return Err(StorageError::InvalidPath(path.display().to_string()));
     }
-    Ok(normalized.to_string_lossy().into_owned())
+    let value = normalized.to_string_lossy().into_owned();
+    // Windows canonicalize() may add the extended-length prefix. Strip it
+    // before persistence so watcher paths and canonical parser paths share a key.
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        Ok(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        Ok(rest.to_owned())
+    } else {
+        Ok(value)
+    }
 }
 
 fn tail_chars(value: &str, limit: usize) -> String {

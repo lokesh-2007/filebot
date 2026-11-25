@@ -2,4 +2,6 @@
 
 mod db;
 
-pub use db::{CommandRecord, Database, DirtyEvent, DirtyOperation, StorageError};
+pub use db::{
+    ChunkInput, CommandRecord, Database, DirtyEvent, DirtyOperation, SearchHit, StorageError,
+};
