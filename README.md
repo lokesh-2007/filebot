@@ -7,13 +7,12 @@ See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and develo
 
 ## Rust migration status
 
-The native Rust migration has started in [`rust/`](rust/). Its current crate
-implements typed settings, SQLite persistence, the command policy and approved
-runner, a proposal-only CMD tool, intent routing, and the filesystem watcher.
-It is not a desktop application yet. Use the Python 0.6.3 app for normal
-operation until the Rust UI, search/indexing, Ollama agent, and integrated
-sleep/wake lifecycle pass the documented parity checks in
-[`rust/README.md`](rust/README.md).
+The native Rust migration is underway in [`rust/`](rust/). It now includes a
+low-overhead Win32 avatar and popover preview wired to local search, streamed
+Ollama chat, the watcher, idle unload, and explicit CMD approval. The Python
+0.6.3 app remains the supported desktop release while the Rust UI is tested on
+Windows and measured for startup, responsiveness, and memory use. See
+[`rust/README.md`](rust/README.md) for build notes and remaining parity checks.
 
 ## Requirements
 

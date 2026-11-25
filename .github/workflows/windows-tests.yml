@@ -24,6 +24,24 @@ jobs:
       - name: Test Rust core
         run: cargo test --manifest-path rust/Cargo.toml --all-targets --locked
 
+  rust-desktop:
+    runs-on: windows-latest
+    env:
+      ORT_SKIP_DOWNLOAD: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Check Rust desktop formatting
+        run: cargo fmt --manifest-path rust/desktop/Cargo.toml -- --check
+      - name: Lint Rust desktop
+        run: cargo clippy --manifest-path rust/desktop/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Type-check Rust desktop
+        run: cargo check --manifest-path rust/desktop/Cargo.toml --locked
+
   production-dependencies:
     runs-on: windows-latest
     strategy:

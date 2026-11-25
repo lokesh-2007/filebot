@@ -1,9 +1,8 @@
 # FileBot Rust migration
 
-This crate is the beginning of the native Rust implementation. The current
-supported desktop application remains the Python 0.6.x build until the Rust
-application passes the parity gates below. Do not launch or advertise this core
-crate as a replacement desktop app yet.
+The Rust migration includes the core library and an early native Win32 desktop
+preview. The supported desktop release remains Python 0.6.x until the Rust
+application passes the Windows UI and performance gates below.
 
 ## Current Rust coverage
 
@@ -42,6 +41,10 @@ crate as a replacement desktop app yet.
 - The always-on watcher caps its event channel and debounce map; overflow events
   are persisted directly to SQLite rather than growing memory without bound.
 - Unsafe Rust is forbidden in the core crate.
+- A separate `rust/desktop` crate provides a compact Win32 avatar and popover,
+  configurable global hotkey, streamed chat with cancellation, local lexical
+  search, visible pending-command approval controls, and a bounded UI event
+  queue/transcript. Its UI uses no browser or Qt runtime.
 
 Build and run the Rust core tests from the repository root with Rust 1.92 or newer:
 
@@ -52,6 +55,20 @@ cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
+Check the native Windows UI crate (the ONNX runtime binary download is not
+needed for type checking):
+
+```powershell
+$env:ORT_SKIP_DOWNLOAD = "1"
+cargo check --manifest-path rust/desktop/Cargo.toml --locked
+cargo clippy --manifest-path rust/desktop/Cargo.toml --all-targets --locked -- -D warnings
+```
+
+To run the desktop preview, build on Windows with network access so the ONNX
+Runtime binary can be installed, then launch `filebot.exe` beside the `config`
+directory. First activation downloads the configured embedding model if it is
+not already cached; chat requires the configured local Ollama model.
+
 ## Migration sequence
 
 1. Add in-place migration tests against a copy of a real 0.6.x database. Keep
@@ -61,10 +78,12 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnin
    clean Windows machines. Keep model construction behind an explicit wake
    boundary; SQLite stores vectors and FTS5 lexical ranking.
 4. Verify chat streaming/cancellation and live Ollama model checks on Windows.
-5. Build the avatar and popover as native Windows windows with `RegisterHotKey`,
-   corner snapping, accessible controls, and explicit command approval.
-6. Wire the native UI to the chat, watcher, and wake/sleep manager. Measure
-   dormant and awake memory on Windows before calling the port an optimization.
+5. Complete native UI parity: keyboard accessibility, clickable file paths,
+   multi-monitor corner snapping, status polish, and an installer-safe config
+   location. The first Win32 shell preview is in place.
+6. Measure UI startup, wake-to-first-result latency, dormant working set, and
+   model-load/unload memory on representative Windows machines; tune from those
+   measurements before calling the port an optimization.
 7. Make the Rust app the default launch target only after CI, live Ollama,
    Windows UI, DB compatibility, and end-to-end command-gating checks pass.
 

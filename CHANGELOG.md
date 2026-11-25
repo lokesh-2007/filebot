@@ -1,5 +1,21 @@
 # Changelog
 
+## Rust migration desktop preview 0.10.0 — 2026-11-25
+
+- Add a separate, low-overhead Win32 desktop shell with a draggable corner
+  avatar, configurable hotkey, popover search/chat UI, streamed output,
+  cancellation, and explicit command approval/rejection controls. Start the
+  bounded SQLite dirty-queue index worker so newly watched files become
+  searchable without loading the embedding model.
+- Keep chat/runtime calls off the UI thread, cap pending UI events and visible
+  transcript memory, run SQLite search away from the window thread, and poll
+  command state at a bounded interval.
+- Show first-token, Ollama preflight, and total turn timings in the popover to
+  make latency tuning observable without logging prompt or response text.
+- Add a Windows CI type-check and clippy gate for the desktop crate. Offline
+  `cargo check` and warning-free clippy pass; live Windows UI and working-set
+  measurements remain outstanding.
+
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
