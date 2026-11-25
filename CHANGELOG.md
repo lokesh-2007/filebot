@@ -3,6 +3,12 @@
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
+## 0.6.2 — 2026-11-25
+
+- Pin the verified Nanobot SDK and Ollama provider versions so upstream API
+  changes cannot silently break chat or streamed tool calls on fresh installs.
+- Verified with 66 unit tests plus compile, dependency, and diff checks.
+
 ## 0.6.1 — 2026-11-25
 
 - Check the configured local Ollama endpoint and model before loading the agent.
