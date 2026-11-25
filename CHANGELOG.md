@@ -54,6 +54,16 @@ versions may still change behavior while the Windows release is stabilized.
 - Verified with 43 Rust tests, locked dependencies, formatting, and warning-free
   clippy. The native UI and lifecycle wiring remain in progress.
 
+## Rust migration core 0.6.0 — 2026-11-25
+
+- Stream ordinary local chat text as Ollama emits it and let the UI cancel the
+  active read. A cancelled answer is not appended to conversation history.
+- Keep action-intent turns buffered so model-generated tool-call sketches are
+  validated before an action result is presented as assistant prose.
+- Preserve the 2 MiB response cap and report stream read failures explicitly.
+- Verified with 45 Rust tests, locked dependencies, formatting, and warning-free
+  clippy. Live Ollama and Windows UI checks remain outstanding.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

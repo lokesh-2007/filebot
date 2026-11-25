@@ -9,7 +9,7 @@ use crate::{
 use reqwest::{Url, blocking::Client};
 use serde_json::{Value, json};
 use std::{
-    io::Read,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -31,6 +31,10 @@ pub enum AgentError {
     Http(#[from] reqwest::Error),
     #[error("Ollama returned invalid response: {0}")]
     Response(String),
+    #[error("Ollama stream read failed: {0}")]
+    StreamIo(#[from] std::io::Error),
+    #[error("chat was cancelled")]
+    Cancelled,
     #[error("local retrieval failed: {0}")]
     Retrieval(#[from] RetrievalError),
     #[error("local storage failed: {0}")]
@@ -45,6 +49,23 @@ pub enum AgentError {
 pub trait OllamaTransport {
     fn check_model(&mut self, model: &str) -> Result<(), AgentError>;
     fn chat(&mut self, request: &Value) -> Result<Value, AgentError>;
+    /// Stream user-visible plain-chat text; transports may provide a buffered fallback.
+    fn chat_stream(
+        &mut self,
+        request: &Value,
+        stream: bool,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<Value, AgentError> {
+        let response = self.chat(request)?;
+        if stream
+            && let Some(content) = response.pointer("/message/content").and_then(Value::as_str)
+            && !content.is_empty()
+            && !on_delta(content)
+        {
+            return Err(AgentError::Cancelled);
+        }
+        Ok(response)
+    }
     fn unload(&mut self, model: &str, keep_alive: &str) -> Result<(), AgentError>;
 }
 
@@ -132,6 +153,73 @@ impl OllamaTransport for LocalOllamaClient {
             .json(request)
             .send()?;
         Self::checked_json(response)
+    }
+    fn chat_stream(
+        &mut self,
+        request: &Value,
+        stream: bool,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<Value, AgentError> {
+        if !stream {
+            return self.chat(request);
+        }
+        let mut request = request.clone();
+        request["stream"] = Value::Bool(true);
+        let response = self
+            .client
+            .post(self.endpoint("api/chat")?)
+            .json(&request)
+            .send()?;
+        if !response.status().is_success() {
+            return Self::checked_json(response);
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(AgentError::Response(
+                "Ollama response exceeded the 2 MiB limit".into(),
+            ));
+        }
+        let mut reader = BufReader::new(response.take(MAX_RESPONSE_BYTES as u64 + 1));
+        let mut message = json!({"role":"assistant","content":""});
+        let mut total_bytes = 0usize;
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let bytes = reader.read_until(b'\n', &mut line)?;
+            if bytes == 0 {
+                break;
+            }
+            total_bytes = total_bytes.saturating_add(bytes);
+            if total_bytes > MAX_RESPONSE_BYTES {
+                return Err(AgentError::Response(
+                    "Ollama response exceeded the 2 MiB limit".into(),
+                ));
+            }
+            let frame: Value = serde_json::from_slice(&line)
+                .map_err(|error| AgentError::Response(error.to_string()))?;
+            if let Some(delta) = frame.pointer("/message/content").and_then(Value::as_str) {
+                message["content"] = json!(format!(
+                    "{}{}",
+                    message["content"].as_str().unwrap_or_default(),
+                    delta
+                ));
+                if !delta.is_empty() && !on_delta(delta) {
+                    return Err(AgentError::Cancelled);
+                }
+            }
+            if let Some(calls) = frame
+                .pointer("/message/tool_calls")
+                .and_then(Value::as_array)
+            {
+                message["tool_calls"] = Value::Array(calls.clone());
+            }
+            if frame.get("done").and_then(Value::as_bool) == Some(true) {
+                break;
+            }
+        }
+        Ok(json!({"message":message}))
     }
     fn unload(&mut self, model: &str, keep_alive: &str) -> Result<(), AgentError> {
         let request = json!({"model":model,"prompt":"","stream":false,"keep_alive":keep_alive});
@@ -345,6 +433,17 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
 
     /// Run one local turn. Clear routing enables only that intent's one tool.
     pub fn ask(&mut self, prompt: &str) -> Result<String, AgentError> {
+        self.ask_streaming(prompt, |_| true)
+    }
+
+    /// Stream ordinary chat deltas and allow the caller to cancel the active HTTP read.
+    /// Action-oriented turns stay buffered so untrusted tool-call sketches never render as
+    /// assistant prose before the runtime validates and executes the allowlisted tool.
+    pub fn ask_streaming(
+        &mut self,
+        prompt: &str,
+        mut on_delta: impl FnMut(&str) -> bool,
+    ) -> Result<String, AgentError> {
         let prompt = prompt.trim();
         if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(ConfigError::Invalid(
@@ -363,10 +462,13 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
         let mut total_tool_calls: usize = 0;
 
         for _ in 0..MAX_TOOL_ROUNDS {
-            let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":false,"keep_alive":self.keep_alive});
+            let should_stream = intent == Intent::Chat;
+            let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":should_stream,"keep_alive":self.keep_alive});
             // Ollama may load a model before a request times out or fails decoding.
             self.model_loaded = true;
-            let response = self.transport.chat(&request)?;
+            let response = self
+                .transport
+                .chat_stream(&request, should_stream, &mut on_delta)?;
             let mut message = response
                 .get("message")
                 .cloned()
@@ -673,6 +775,38 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_chat_streams_text_deltas_as_the_model_responds() {
+        let transport = MockTransport {
+            responses: Arc::new(Mutex::new(vec![final_response("Hello locally")])),
+            ..Default::default()
+        };
+        let requests = Arc::clone(&transport.requests);
+        let mut runtime = BotRuntime::new(&settings(), transport, MockTools::default()).unwrap();
+        let mut deltas = Vec::new();
+        let answer = runtime
+            .ask_streaming("Explain local indexing", |delta| {
+                deltas.push(delta.to_owned());
+                true
+            })
+            .unwrap();
+        assert_eq!(answer, "Hello locally");
+        assert_eq!(deltas, ["Hello locally"]);
+        assert_eq!(requests.lock().unwrap()[0]["stream"], true);
+    }
+
+    #[test]
+    fn cancelling_stream_does_not_store_a_partial_turn_in_history() {
+        let transport = MockTransport {
+            responses: Arc::new(Mutex::new(vec![final_response("partial")])),
+            ..Default::default()
+        };
+        let mut runtime = BotRuntime::new(&settings(), transport, MockTools::default()).unwrap();
+        let result = runtime.ask_streaming("Explain local indexing", |_| false);
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+        assert!(runtime.history.is_empty());
+    }
+
+    #[test]
     fn a_command_turn_can_only_stage_a_proposal_and_never_claims_execution() {
         let transport = MockTransport {
             responses: Arc::new(Mutex::new(vec![
@@ -690,6 +824,7 @@ mod tests {
         let captured = requests.lock().unwrap();
         assert_eq!(captured[0]["tools"].as_array().unwrap().len(), 1);
         assert_eq!(captured[0]["tools"][0]["function"]["name"], "propose_cmd");
+        assert_eq!(captured[0]["stream"], false);
         assert_eq!(calls.lock().unwrap().as_slice(), &["propose_cmd"]);
     }
 

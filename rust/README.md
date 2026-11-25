@@ -27,7 +27,8 @@ crate as a replacement desktop app yet.
   after first use, and subsequent activation can run without network access.
 - A local-only Ollama runtime with model preflight, bounded turn history,
   per-intent tool allowlists, Qwen text-call compatibility, five-call limits,
-  explicit proposal-only CMD handling, and configured idle unload.
+  explicit proposal-only CMD handling, configured idle unload, and cancellable
+  streaming for ordinary chat turns.
 - Indexed file opening validates canonical paths, configured roots, and current
   SQLite index membership. The agent has no shell execution or file-write tool.
 - Unsafe Rust is forbidden in the core crate.
@@ -49,7 +50,7 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnin
 3. Benchmark hybrid retrieval and test semantic model cache/install behavior on
    clean Windows machines. Keep model construction behind an explicit wake
    boundary; SQLite stores vectors and FTS5 lexical ranking.
-4. Add chat streaming/cancellation and live Ollama model checks on Windows.
+4. Verify chat streaming/cancellation and live Ollama model checks on Windows.
 5. Build the avatar and popover as native Windows windows with `RegisterHotKey`,
    corner snapping, accessible controls, and explicit command approval.
 6. Integrate the chat, watcher, and wake/sleep manager. Measure dormant and awake memory on
