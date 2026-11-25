@@ -64,6 +64,15 @@ versions may still change behavior while the Windows release is stabilized.
 - Verified with 45 Rust tests, locked dependencies, formatting, and warning-free
   clippy. Live Ollama and Windows UI checks remain outstanding.
 
+## Rust migration core 0.7.0 — 2026-11-25
+
+- Add a dormant lifecycle supervisor with explicit wake/sleep, streamed turns,
+  automatic idle unload, and avatar-ready `sleep`/`active` states.
+- Stop its lightweight worker cleanly on drop and surface worker startup errors
+  instead of panicking. Supervisor startup does not load Ollama or ONNX models.
+- Verified with 47 Rust tests, locked dependencies, formatting, and warning-free
+  clippy. Native UI wiring and live Ollama checks remain outstanding.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,
