@@ -243,12 +243,16 @@ class DatabaseTests(unittest.TestCase):
             def search(self, query, limit=10):
                 return []
 
-        runtime = BotRuntime({"index": {}}, self.db, FakeEngine())
+        runtime = BotRuntime({"index": {}, "models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "test-model",
+        }}}, self.db, FakeEngine())
         runtime.bot = bot
         runtime._start_async_loop()
         try:
-            self.assertEqual(runtime.ask("Explain local indexing"), "Explain local indexing")
-            self.assertEqual(runtime.ask("Explain retrieval fusion"), "Explain retrieval fusion")
+            with patch.object(runtime, "_check_ollama_ready") as check_ollama:
+                self.assertEqual(runtime.ask("Explain local indexing"), "Explain local indexing")
+                self.assertEqual(runtime.ask("Explain retrieval fusion"), "Explain retrieval fusion")
+                self.assertEqual(check_ollama.call_count, 2)
         finally:
             runtime._model_used = False
             runtime.close()

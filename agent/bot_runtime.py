@@ -241,7 +241,7 @@ class BotRuntime:
     def _prepare_prompt(self, prompt: str) -> tuple[str, str]:
         """Apply local routing and add only the context needed for one turn."""
         intent = self.router.route(prompt)
-        if self.bot is None:
+        if isinstance(self.settings.get("models"), dict):
             self._check_ollama_ready()
         if intent == "search":
             self.indexer.drain(limit=100)
