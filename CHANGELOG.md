@@ -34,6 +34,15 @@ versions may still change behavior while the Windows release is stabilized.
   case-insensitively so watcher events and canonical paths refer to one record.
 - Verified with 34 Rust tests, formatting, and warning-free clippy.
 
+## Rust migration core 0.4.0 — 2026-11-25
+
+- Add a dormant fastembed ONNX engine using BGE-small, persisted float32 vectors,
+  bounded incremental embedding, cosine search, and RRF fusion with SQLite FTS5.
+- ONNX and model weights initialize only after explicit activation; the engine
+  keeps FTS5 search available when semantic inference is inactive or unavailable.
+- Verify Rust 1.92 MSRV and lockfile usage in Windows CI. Verified with 37 Rust
+  tests, formatting, and warning-free clippy.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

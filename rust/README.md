@@ -17,18 +17,23 @@ crate as a replacement desktop app yet.
 - Default-deny policy parsing from the existing `config/cmd_policy.yaml`, a
   proposal-only tool, live policy rechecks, and a bounded Windows CMD runner.
 - Deterministic command/search/open/chat intent routing.
-- Bounded TXT/Markdown/PDF/DOCX parsing and an awake-only dirty-queue service with SHA-256
-  revision checks, configured-root enforcement, retry handling, and transactional
-  SQLite chunk storage plus FTS5 lexical ranking and rebuilds for existing chunks.
+- Bounded TXT/Markdown/PDF/DOCX parsing and an awake-only dirty-queue service with
+  SHA-256 revision checks, configured-root enforcement, retry handling, and
+  transactional SQLite chunk storage.
+- SQLite FTS5 lexical ranking plus fastembed BGE-small ONNX vectors, stored as
+  float32 blobs and ranked with cosine similarity and reciprocal rank fusion.
+- ONNX and model weights remain unloaded until `HybridEngine::activate()`; an
+  inactive engine still serves local FTS5 search. The model is cached locally
+  after first use, and subsequent activation can run without network access.
 - Unsafe Rust is forbidden in the core crate.
 
-Build and run the Rust core tests from the repository root:
+Build and run the Rust core tests from the repository root with Rust 1.92 or newer:
 
 ```powershell
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-cargo test --manifest-path rust/Cargo.toml --all-targets
+cargo test --manifest-path rust/Cargo.toml --all-targets --locked
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
 ## Migration sequence
@@ -36,9 +41,9 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 1. Add in-place migration tests against a copy of a real 0.6.x database. Keep
    the existing database usable throughout the port.
 2. Add source-code parsing and test real 0.6.x database migration in place.
-3. Port hybrid retrieval. Keep model construction behind an explicit wake
-   boundary; use SQLite FTS5 plus a local vector store unless benchmarks show a
-   better fully embedded Rust option.
+3. Benchmark hybrid retrieval and test semantic model cache/install behavior on
+   clean Windows machines. Keep model construction behind an explicit wake
+   boundary; SQLite stores vectors and FTS5 lexical ranking.
 4. Port Ollama chat and the narrow search/open/propose tools. Ordinary chat must
    not receive action tools, and model output must never invoke the shell.
 5. Build the avatar and popover as native Windows windows with `RegisterHotKey`,

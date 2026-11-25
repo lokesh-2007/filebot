@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS chunks (
     UNIQUE(file_id, chunk_index), CHECK(length(chunk_id) > 0)
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+    chunk_id TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    dimension INTEGER NOT NULL CHECK(dimension > 0),
+    vector BLOB NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     chunk_id UNINDEXED, file_name, snippet, heading,
     tokenize='unicode61 remove_diacritics 2'
@@ -161,6 +166,13 @@ pub struct SearchHit {
     pub page_or_line: Option<String>,
     pub heading: Option<String>,
     pub score: f64,
+}
+
+/// Text awaiting local embedding inference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnembeddedChunk {
+    pub chunk_id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Error)]
@@ -422,6 +434,123 @@ impl Database {
             },
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Return a bounded batch of chunks without persisted dense vectors.
+    pub fn unembedded_chunks(&self, limit: usize) -> Result<Vec<UnembeddedChunk>, StorageError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT c.chunk_id,c.snippet FROM chunks c LEFT JOIN chunk_embeddings e ON e.chunk_id=c.chunk_id \
+             WHERE e.chunk_id IS NULL ORDER BY c.rowid LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.min(i64::MAX as usize) as i64], |row| {
+            Ok(UnembeddedChunk {
+                chunk_id: row.get(0)?,
+                text: row.get(1)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Persist a batch of dense vectors as compact little-endian float32 blobs.
+    pub fn store_embeddings(&self, vectors: &[(String, Vec<f32>)]) -> Result<(), StorageError> {
+        if vectors.iter().any(|(_, vector)| {
+            vector.is_empty()
+                || vector.len() > 100_000
+                || vector.iter().any(|value| !value.is_finite())
+        }) {
+            return Err(StorageError::InvalidValue(
+                "embedding vectors must be finite and bounded".into(),
+            ));
+        }
+        let connection = self.connect()?;
+        let tx = connection.unchecked_transaction()?;
+        for (chunk_id, vector) in vectors {
+            let mut bytes = Vec::with_capacity(vector.len() * 4);
+            for value in vector {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            tx.execute(
+                "INSERT INTO chunk_embeddings(chunk_id,dimension,vector) VALUES(?1,?2,?3) \
+                 ON CONFLICT(chunk_id) DO UPDATE SET dimension=excluded.dimension,vector=excluded.vector",
+                params![chunk_id,vector.len() as i64,bytes],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Score persisted vectors against a query without loading the whole corpus into memory.
+    pub fn search_dense(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StorageError> {
+        if query.is_empty() || limit == 0 || query.iter().any(|value| !value.is_finite()) {
+            return Ok(Vec::new());
+        }
+        let query_norm = query.iter().map(|value| value * value).sum::<f32>().sqrt();
+        if query_norm == 0.0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT c.chunk_id,f.path,f.file_name,c.snippet,c.page_or_line,c.heading,e.dimension,e.vector \
+             FROM chunk_embeddings e JOIN chunks c ON c.chunk_id=e.chunk_id \
+             JOIN files f ON f.file_id=c.file_id WHERE f.status='indexed'",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut best: Vec<SearchHit> = Vec::with_capacity(limit.min(100));
+        let limit = limit.min(1000);
+        while let Some(row) = rows.next()? {
+            let dimension: usize = row.get::<_, i64>(6)?.max(0) as usize;
+            let bytes: Vec<u8> = row.get(7)?;
+            if dimension != query.len() || bytes.len() != dimension.saturating_mul(4) {
+                continue;
+            }
+            let (vector_bytes, _) = bytes.as_chunks::<4>();
+            let vector = vector_bytes
+                .iter()
+                .map(|part| f32::from_le_bytes(*part))
+                .collect::<Vec<_>>();
+            if vector.iter().any(|value| !value.is_finite()) {
+                continue;
+            }
+            let dot = query
+                .iter()
+                .zip(&vector)
+                .map(|(left, right)| left * right)
+                .sum::<f32>();
+            let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+            if norm == 0.0 {
+                continue;
+            }
+            let score = (dot / (query_norm * norm)) as f64;
+            let hit = SearchHit {
+                chunk_id: row.get(0)?,
+                path: row.get(1)?,
+                file_name: row.get(2)?,
+                snippet: row.get(3)?,
+                page_or_line: row.get(4)?,
+                heading: row.get(5)?,
+                score,
+            };
+            if best.len() < limit {
+                best.push(hit);
+            } else if let Some((worst_index, worst)) = best
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| left.score.total_cmp(&right.score))
+                && score > worst.score
+            {
+                best[worst_index] = hit;
+            }
+        }
+        best.sort_by(|left, right| right.score.total_cmp(&left.score));
+        Ok(best)
     }
 
     /// Return ready events in oldest-first order without acknowledging them.
@@ -891,5 +1020,44 @@ mod tests {
         db.initialize().unwrap();
         assert_eq!(db.search_lexical("needle", 5).unwrap().len(), 1);
         assert!(db.search_lexical("needle OR *", 5).is_ok());
+    }
+
+    #[test]
+    fn stores_and_ranks_dense_vectors_without_loading_all_results() {
+        let (dir, db) = database();
+        let path = dir.path().join("vectors.md");
+        db.replace_file(
+            &path,
+            "hash",
+            10,
+            1.0,
+            &[
+                ChunkInput {
+                    text: "north vector".into(),
+                    page_or_line: None,
+                    heading: None,
+                },
+                ChunkInput {
+                    text: "east vector".into(),
+                    page_or_line: None,
+                    heading: None,
+                },
+            ],
+        )
+        .unwrap();
+        let chunks = db.unembedded_chunks(10).unwrap();
+        assert_eq!(chunks.len(), 2);
+        db.store_embeddings(&[
+            (chunks[0].chunk_id.clone(), vec![1.0, 0.0]),
+            (chunks[1].chunk_id.clone(), vec![0.0, 1.0]),
+        ])
+        .unwrap();
+        let results = db.search_dense(&[0.9, 0.1], 2).unwrap();
+        assert_eq!(results[0].chunk_id, chunks[0].chunk_id);
+        assert!(db.unembedded_chunks(10).unwrap().is_empty());
+        assert!(
+            db.store_embeddings(&[(chunks[0].chunk_id.clone(), vec![f32::NAN])])
+                .is_err()
+        );
     }
 }
