@@ -3,6 +3,16 @@
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
+## 0.6.1 — 2026-11-25
+
+- Check the configured local Ollama endpoint and model before loading the agent.
+  Show a direct recovery step when Ollama is stopped or the model has not been
+  pulled.
+- Document the chat setup recovery steps and add preflight regression coverage.
+- Verified with 66 unit tests plus compile, dependency, and diff checks.
+- Confirmed the preflight reaches the local Ollama server and finds the configured
+  `qwen2.5-coder:3b` model on this machine.
+
 ## 0.6.0 — 2026-11-25
 
 - Extend the 0.5 production hardening with bounded document parsing, path-root

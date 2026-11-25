@@ -241,6 +241,8 @@ class BotRuntime:
     def _prepare_prompt(self, prompt: str) -> tuple[str, str]:
         """Apply local routing and add only the context needed for one turn."""
         intent = self.router.route(prompt)
+        if self.bot is None:
+            self._check_ollama_ready()
         if intent == "search":
             self.indexer.drain(limit=100)
         self._activate()
@@ -254,6 +256,33 @@ class BotRuntime:
             context = "\n\nLocal search results (cite paths; do not invent file contents):\n" + json.dumps(hits, ensure_ascii=False)
             prompt += context
         return intent, prompt
+
+    def _check_ollama_ready(self) -> None:
+        """Fail quickly with recovery steps when Ollama or its model is missing."""
+        from urllib.request import urlopen
+
+        ollama = self.settings.get("models", {}).get("ollama", {})
+        base_url = str(ollama.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
+        model = str(ollama.get("model", "qwen2.5-coder:3b"))
+        try:
+            with urlopen(f"{base_url}/api/tags", timeout=4) as response:
+                payload = json.loads(response.read(1_000_001).decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                f"FileBot cannot reach Ollama at {base_url}. Start Ollama and try again. "
+                f"Details: {exc}"
+            ) from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise RuntimeError(f"Ollama at {base_url} returned an invalid model list.")
+        installed = {
+            str(item.get("name") or item.get("model"))
+            for item in payload["models"] if isinstance(item, dict)
+        }
+        if model not in installed:
+            raise RuntimeError(
+                f"FileBot's model '{model}' is not installed in Ollama. Run "
+                f"`ollama pull {model}` and try again."
+            )
 
     def _run_agent(self, intent: str, coroutine: Any) -> Any:
         """Run one serialized turn with only tools appropriate for its intent."""

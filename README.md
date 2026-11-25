@@ -1,4 +1,4 @@
-# FileBot 0.6.0
+# FileBot 0.6.1
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
 
@@ -26,6 +26,8 @@ ollama pull qwen2.5-coder:3b
 The FastEmbed embedding model is downloaded on the first wake into the cache directory in `config/settings.yaml`. ChromaDB data, the SQLite database, rotating logs, and Nanobot state are stored under `~/.filebot` by default. Configured paths support `~`, `%VARIABLE%`, and `$VARIABLE` expansion.
 
 Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, and `keep_alive`. Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
+
+If **Ask** reports that Ollama cannot be reached, start Ollama from the Start menu and try again. If it reports the configured model is missing, run `ollama pull qwen2.5-coder:3b` (or pull the model name you set in `settings.yaml`). FileBot checks the local Ollama endpoint and configured model before loading Nanobot for a chat turn.
 
 Start FileBot hidden in the signed-in desktop session with:
 

@@ -328,6 +328,29 @@ class DatabaseTests(unittest.TestCase):
         ])
         self.assertIs(bot._loop.tools, full_registry)
 
+    def test_ollama_preflight_accepts_the_configured_installed_model(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:3b",
+        }}}, self.db, object())
+        response = BytesIO(b'{"models":[{"name":"qwen2.5-coder:3b"}]}')
+        with patch("urllib.request.urlopen", return_value=response) as request:
+            runtime._check_ollama_ready()
+
+        request.assert_called_once_with("http://127.0.0.1:11434/api/tags", timeout=4)
+
+    def test_ollama_preflight_explains_missing_model_and_service(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:3b",
+        }}}, self.db, object())
+        with patch("urllib.request.urlopen", return_value=BytesIO(b'{"models":[]}')):
+            with self.assertRaisesRegex(RuntimeError, "ollama pull qwen2.5-coder:3b"):
+                runtime._check_ollama_ready()
+
+        from urllib.error import URLError
+        with patch("urllib.request.urlopen", side_effect=URLError("connection refused")):
+            with self.assertRaisesRegex(RuntimeError, "Start Ollama and try again"):
+                runtime._check_ollama_ready()
+
     def test_bot_runtime_streams_text_deltas_and_returns_final_result(self) -> None:
         class StreamingBot:
             async def stream(self, prompt, **kwargs):
