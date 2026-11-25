@@ -39,6 +39,31 @@ CREATE TABLE IF NOT EXISTS chunks (
     UNIQUE(file_id, chunk_index), CHECK(length(chunk_id) > 0)
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    chunk_id UNINDEXED, file_name, snippet, heading,
+    tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid,chunk_id,file_name,snippet,heading)
+    SELECT new.rowid,new.chunk_id,f.file_name,new.snippet,COALESCE(new.heading,'')
+    FROM files f WHERE f.file_id=new.file_id;
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid=old.rowid;
+    INSERT INTO chunks_fts(rowid,chunk_id,file_name,snippet,heading)
+    SELECT new.rowid,new.chunk_id,f.file_name,new.snippet,COALESCE(new.heading,'')
+    FROM files f WHERE f.file_id=new.file_id;
+END;
+CREATE TRIGGER IF NOT EXISTS files_fts_rename AFTER UPDATE OF file_name ON files
+WHEN old.file_name<>new.file_name BEGIN
+    DELETE FROM chunks_fts WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE file_id=new.file_id);
+    INSERT INTO chunks_fts(rowid,chunk_id,file_name,snippet,heading)
+    SELECT c.rowid,c.chunk_id,new.file_name,c.snippet,COALESCE(c.heading,'')
+    FROM chunks c WHERE c.file_id=new.file_id;
+END;
 CREATE TABLE IF NOT EXISTS dirty_queue (
     path TEXT PRIMARY KEY,
     event_type TEXT NOT NULL CHECK(event_type IN ('upsert', 'delete')),
@@ -190,6 +215,13 @@ impl Database {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let tx = connection.unchecked_transaction()?;
         tx.execute_batch(SCHEMA)?;
+        tx.execute(
+            "INSERT INTO chunks_fts(rowid,chunk_id,file_name,snippet,heading) \
+             SELECT c.rowid,c.chunk_id,f.file_name,c.snippet,COALESCE(c.heading,'') \
+             FROM chunks c JOIN files f ON f.file_id=c.file_id \
+             WHERE NOT EXISTS(SELECT 1 FROM chunks_fts x WHERE x.rowid=c.rowid)",
+            [],
+        )?;
         let mut statement = tx.prepare("PRAGMA table_info(dirty_queue)")?;
         let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
         let mut has_available_at = false;
@@ -353,17 +385,30 @@ impl Database {
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let terms = query
+            .split_whitespace()
+            .filter_map(|term| {
+                let clean: String = term
+                    .chars()
+                    .filter(|ch| ch.is_alphanumeric() || *ch == '_')
+                    .collect();
+                (!clean.is_empty()).then(|| format!("\"{}\"", clean.replace('"', "\"\"")))
+            })
+            .collect::<Vec<_>>();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let match_query = terms.join(" OR ");
         let connection = self.connect()?;
         let mut statement = connection.prepare(
-            "SELECT c.chunk_id,f.path,f.file_name,c.snippet,c.page_or_line,c.heading \
+            "SELECT c.chunk_id,f.path,f.file_name,c.snippet,c.page_or_line,c.heading,bm25(chunks_fts) \
              FROM chunks c JOIN files f ON f.file_id=c.file_id \
-             WHERE f.status='indexed' AND (c.snippet LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR f.file_name LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
-             ORDER BY CASE WHEN f.file_name LIKE ?1 ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, length(c.snippet) \
-             LIMIT ?2",
+             JOIN chunks_fts ON chunks_fts.chunk_id=c.chunk_id \
+             WHERE f.status='indexed' AND chunks_fts MATCH ?1 \
+             ORDER BY bm25(chunks_fts) LIMIT ?2",
         )?;
         let rows = statement.query_map(
-            params![pattern, limit.min(i64::MAX as usize) as i64],
+            params![match_query, limit.min(i64::MAX as usize) as i64],
             |row| {
                 Ok(SearchHit {
                     chunk_id: row.get(0)?,
@@ -372,7 +417,7 @@ impl Database {
                     snippet: row.get(3)?,
                     page_or_line: row.get(4)?,
                     heading: row.get(5)?,
-                    score: 1.0,
+                    score: -row.get::<_, f64>(6)?,
                 })
             },
         )?;
@@ -818,5 +863,33 @@ mod tests {
         assert_eq!(db.search_lexical("fresh", 10).unwrap().len(), 1);
         assert!(db.delete_file(&path).unwrap());
         assert!(db.search_lexical("fresh", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rebuilds_fts_from_existing_chunks_and_quotes_search_input() {
+        let (dir, db) = database();
+        let path = dir.path().join("archive.md");
+        db.replace_file(
+            &path,
+            "hash",
+            12,
+            1.0,
+            &[ChunkInput {
+                text: "needle in existing content".into(),
+                page_or_line: None,
+                heading: None,
+            }],
+        )
+        .unwrap();
+        {
+            let connection = db.connect().unwrap();
+            connection.execute_batch(
+                "DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; \
+                 DROP TRIGGER chunks_fts_update; DROP TRIGGER files_fts_rename; DROP TABLE chunks_fts;",
+            ).unwrap();
+        }
+        db.initialize().unwrap();
+        assert_eq!(db.search_lexical("needle", 5).unwrap().len(), 1);
+        assert!(db.search_lexical("needle OR *", 5).is_ok());
     }
 }

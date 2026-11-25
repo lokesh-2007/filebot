@@ -17,9 +17,9 @@ crate as a replacement desktop app yet.
 - Default-deny policy parsing from the existing `config/cmd_policy.yaml`, a
   proposal-only tool, live policy rechecks, and a bounded Windows CMD runner.
 - Deterministic command/search/open/chat intent routing.
-- Bounded TXT/Markdown/PDF/DOCX parsing and a dirty-queue drain with SHA-256
+- Bounded TXT/Markdown/PDF/DOCX parsing and an awake-only dirty-queue service with SHA-256
   revision checks, configured-root enforcement, retry handling, and transactional
-  SQLite chunk storage plus lexical search.
+  SQLite chunk storage plus FTS5 lexical ranking and rebuilds for existing chunks.
 - Unsafe Rust is forbidden in the core crate.
 
 Build and run the Rust core tests from the repository root:

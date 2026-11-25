@@ -19,12 +19,20 @@ versions may still change behavior while the Windows release is stabilized.
 - Add the proposal-only CMD tool, deterministic intent router, and approved
   command runner with live policy rechecks, a sanitized System32 search path,
   bounded output, timeout, and durable audit completion.
-- Add bounded TXT/Markdown/PDF/DOCX parsing and a durable dirty-queue drain with
-  SHA-256 revisions, root containment, retry handling, and transactional SQLite
-  file/chunk replacement plus parameterized lexical search.
+- Add bounded TXT/Markdown parsing and transactional SQLite file/chunk
+  replacement, deletion, and lexical search.
+- Verified with 29 Rust tests, formatting, and warning-free clippy.
+
+## Rust migration core 0.3.0 — 2026-11-25
+
+- Add native PDF and DOCX extraction with page/heading metadata and bounded
+  output/ZIP expansion, plus a durable index queue worker with SHA-256 revisions,
+  configured-root checks, retry backoff, and worker shutdown.
+- Replace substring matching with maintained FTS5 lexical ranking; existing
+  SQLite chunks are backfilled into the FTS index on initialization.
 - Normalize Windows extended-length paths and match file operations
   case-insensitively so watcher events and canonical paths refer to one record.
-- Verified with 33 Rust tests, formatting, and warning-free clippy.
+- Verified with 34 Rust tests, formatting, and warning-free clippy.
 
 ## 0.6.3 — 2026-11-25
 
