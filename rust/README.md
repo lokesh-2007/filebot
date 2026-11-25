@@ -25,6 +25,11 @@ crate as a replacement desktop app yet.
 - ONNX and model weights remain unloaded until `HybridEngine::activate()`; an
   inactive engine still serves local FTS5 search. The model is cached locally
   after first use, and subsequent activation can run without network access.
+- A local-only Ollama runtime with model preflight, bounded turn history,
+  per-intent tool allowlists, Qwen text-call compatibility, five-call limits,
+  explicit proposal-only CMD handling, and configured idle unload.
+- Indexed file opening validates canonical paths, configured roots, and current
+  SQLite index membership. The agent has no shell execution or file-write tool.
 - Unsafe Rust is forbidden in the core crate.
 
 Build and run the Rust core tests from the repository root with Rust 1.92 or newer:
@@ -44,11 +49,10 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnin
 3. Benchmark hybrid retrieval and test semantic model cache/install behavior on
    clean Windows machines. Keep model construction behind an explicit wake
    boundary; SQLite stores vectors and FTS5 lexical ranking.
-4. Port Ollama chat and the narrow search/open/propose tools. Ordinary chat must
-   not receive action tools, and model output must never invoke the shell.
+4. Add chat streaming/cancellation and live Ollama model checks on Windows.
 5. Build the avatar and popover as native Windows windows with `RegisterHotKey`,
    corner snapping, accessible controls, and explicit command approval.
-6. Integrate the watcher and wake/sleep manager. Measure dormant and awake memory on
+6. Integrate the chat, watcher, and wake/sleep manager. Measure dormant and awake memory on
    Windows before calling the port an optimization.
 7. Make the Rust app the default launch target only after CI, live Ollama,
    Windows UI, DB compatibility, and end-to-end command-gating checks pass.

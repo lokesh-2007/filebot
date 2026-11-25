@@ -1,6 +1,6 @@
 [package]
 name = "filebot"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Low-memory local file search and gated CMD assistant for Windows"
@@ -23,6 +23,8 @@ quick-xml = "0.38"
 pdf-extract = "0.12.1"
 sha2 = "0.10"
 fastembed = { version = "7.8.0", default-features = false, features = ["fancy-regex", "hf-hub-rustls-tls", "onnx", "ort-download-binaries-rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3.23"

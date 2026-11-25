@@ -157,7 +157,7 @@ pub struct ChunkInput {
 }
 
 /// Lexical search hit returned from the persistent chunk table.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SearchHit {
     pub chunk_id: String,
     pub path: String,
@@ -385,6 +385,17 @@ impl Database {
             "DELETE FROM files WHERE path=?1 COLLATE NOCASE",
             [normalized],
         )? > 0)
+    }
+
+    /// Return whether a normalized path is currently present in the local file index.
+    pub fn is_indexed_file(&self, path: impl AsRef<Path>) -> Result<bool, StorageError> {
+        let normalized = normalize_path(path.as_ref())?;
+        let connection = self.connect()?;
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE path=?1 COLLATE NOCASE AND status='indexed')",
+            [normalized],
+            |row| row.get::<_, bool>(0),
+        )?)
     }
 
     /// Search indexed paths and snippets using parameterized substring matches.

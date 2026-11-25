@@ -43,6 +43,17 @@ versions may still change behavior while the Windows release is stabilized.
 - Verify Rust 1.92 MSRV and lockfile usage in Windows CI. Verified with 37 Rust
   tests, formatting, and warning-free clippy.
 
+## Rust migration core 0.5.0 — 2026-11-25
+
+- Add a lazy local Ollama chat runtime with bounded conversation history,
+  configured keep-alive unload, and model preflight checks.
+- Restrict each routed turn to one tool surface: search, indexed/root-contained
+  file open, or proposal-only CMD. No shell tool is exposed to model output.
+- Support Qwen text-encoded function calls, cap tool turns/calls, bound HTTP
+  response bodies, and reject non-loopback Ollama endpoints.
+- Verified with 43 Rust tests, locked dependencies, formatting, and warning-free
+  clippy. The native UI and lifecycle wiring remain in progress.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,
