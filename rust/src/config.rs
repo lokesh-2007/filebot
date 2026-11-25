@@ -142,8 +142,10 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
         ));
     }
     if index.debounce_seconds < 0.0
+        || index.debounce_seconds > 3600.0
         || !index.debounce_seconds.is_finite()
         || index.background_poll_seconds <= 0.0
+        || index.background_poll_seconds > 3600.0
         || !index.background_poll_seconds.is_finite()
         || index.background_batch_size == 0
     {

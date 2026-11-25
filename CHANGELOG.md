@@ -12,6 +12,17 @@ versions may still change behavior while the Windows release is stabilized.
 - Add Windows CI formatting, clippy, and Rust unit-test gates. The 15 core tests,
   formatting check, and warning-free clippy run pass locally.
 
+## Rust migration core 0.2.0 — 2026-11-25
+
+- Port the low-memory recursive watcher, initial scan, root/extension/exclusion
+  checks, debounce, and directory rename/delete queueing to Rust.
+- Add the proposal-only CMD tool, deterministic intent router, and approved
+  command runner with live policy rechecks, a sanitized System32 search path,
+  bounded output, timeout, and durable audit completion.
+- Add bounded TXT/Markdown chunking and transactional SQLite file/chunk
+  replacement, deletion, and parameterized lexical search.
+- Verified with 29 Rust tests, formatting, and warning-free clippy.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

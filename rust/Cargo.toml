@@ -1,6 +1,6 @@
 [package]
 name = "filebot"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Low-memory local file search and gated CMD assistant for Windows"
@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 regex = "1.12"
+notify = "8.2"
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml_ng = "0.10"

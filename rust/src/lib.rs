@@ -4,8 +4,11 @@
 //! feature-complete stages. This crate deliberately keeps heavyweight inference
 //! and embedding dependencies out of its baseline build.
 
+pub mod agent;
 pub mod config;
+pub mod daemon;
 pub mod executor;
+pub mod retrieval;
 pub mod storage;
 
 /// FileBot Rust core version, independent from the currently shipping Python app.

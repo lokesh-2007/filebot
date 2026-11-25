@@ -8,10 +8,12 @@ See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and develo
 ## Rust migration status
 
 The native Rust migration has started in [`rust/`](rust/). Its current crate
-implements typed settings, SQLite persistence primitives, and the command
-policy, but it is not a desktop application yet. Use the Python 0.6.3 app for
-normal operation until the Rust UI, watcher, search/indexing, agent, and gated
-executor pass the documented parity checks in [`rust/README.md`](rust/README.md).
+implements typed settings, SQLite persistence, the command policy and approved
+runner, a proposal-only CMD tool, intent routing, and the filesystem watcher.
+It is not a desktop application yet. Use the Python 0.6.3 app for normal
+operation until the Rust UI, search/indexing, Ollama agent, and integrated
+sleep/wake lifecycle pass the documented parity checks in
+[`rust/README.md`](rust/README.md).
 
 ## Requirements
 

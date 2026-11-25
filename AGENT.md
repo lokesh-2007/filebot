@@ -26,6 +26,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `scripts/setup.ps1`, `scripts/start.ps1` — environment setup and desktop-session launch.
 - `tests/` — unit, Qt lifecycle, retrieval, watcher, startup, and Ollama tool-bridge checks.
 - `rust/` — in-progress native migration; see `rust/README.md`. Do not treat the core crate as a desktop replacement until its parity gates pass.
+- Rust core modules: `rust/src/config.rs`, `rust/src/storage/`, `rust/src/daemon/watcher.rs`, `rust/src/executor/`, and `rust/src/agent/`.
 
 ## Safety and privacy invariants
 

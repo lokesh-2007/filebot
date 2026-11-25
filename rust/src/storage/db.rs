@@ -118,6 +118,26 @@ pub struct CommandRecord {
     pub executed_at: Option<f64>,
 }
 
+/// Parsed text and optional source metadata ready for durable chunk storage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChunkInput {
+    pub text: String,
+    pub page_or_line: Option<String>,
+    pub heading: Option<String>,
+}
+
+/// Lexical search hit returned from the persistent chunk table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchHit {
+    pub chunk_id: String,
+    pub path: String,
+    pub file_name: String,
+    pub snippet: String,
+    pub page_or_line: Option<String>,
+    pub heading: Option<String>,
+    pub score: f64,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("invalid database path: {0}")]
@@ -202,17 +222,147 @@ impl Database {
         path: impl AsRef<Path>,
         operation: DirtyOperation,
     ) -> Result<(), StorageError> {
-        let normalized = normalize_path(path.as_ref())?;
+        self.enqueue_dirty_batch(&[(path.as_ref().to_path_buf(), operation)])
+    }
+
+    /// Atomically coalesce a bounded batch of paths using one SQLite connection.
+    pub fn enqueue_dirty_batch(
+        &self,
+        events: &[(PathBuf, DirtyOperation)],
+    ) -> Result<(), StorageError> {
+        if events.is_empty() {
+            return Ok(());
+        }
         let now = unix_time()?;
-        let connection = self.connect()?;
-        connection.execute(
+        let normalized = events
+            .iter()
+            .map(|(path, operation)| Ok((normalize_path(path)?, operation.as_str())))
+            .collect::<Result<Vec<_>, StorageError>>()?;
+        let mut connection = self.connect()?;
+        let tx = connection.transaction()?;
+        for (path, operation) in normalized {
+            tx.execute(
             "INSERT INTO dirty_queue(path,event_type,queued_at,available_at,attempts,last_error) \
              VALUES(?1,?2,?3,?3,0,NULL) ON CONFLICT(path) DO UPDATE SET \
              event_type=excluded.event_type, queued_at=MAX(excluded.queued_at,dirty_queue.queued_at+0.000001), \
              available_at=excluded.available_at, attempts=0, last_error=NULL",
-            params![normalized, operation.as_str(), now],
-        )?;
+                params![path, operation, now],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Return indexed and queued file paths below a directory, excluding the directory itself.
+    pub fn paths_under(&self, directory: impl AsRef<Path>) -> Result<Vec<String>, StorageError> {
+        let mut prefix = normalize_path(directory.as_ref())?;
+        if !prefix.ends_with('\\') && !prefix.ends_with('/') {
+            prefix.push(std::path::MAIN_SEPARATOR);
+        }
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT path FROM files WHERE substr(path,1,length(?1)) COLLATE NOCASE=?1 \
+             UNION SELECT path FROM dirty_queue WHERE substr(path,1,length(?1)) COLLATE NOCASE=?1 \
+             ORDER BY path",
+        )?;
+        let rows = statement.query_map([prefix], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Transactionally replace a file's indexed metadata and parsed chunks.
+    pub fn replace_file(
+        &self,
+        path: impl AsRef<Path>,
+        content_hash: &str,
+        size_bytes: u64,
+        modified_seconds: f64,
+        chunks: &[ChunkInput],
+    ) -> Result<(), StorageError> {
+        if !modified_seconds.is_finite() || content_hash.len() > 256 {
+            return Err(StorageError::InvalidValue("invalid file metadata".into()));
+        }
+        let normalized = normalize_path(path.as_ref())?;
+        let file_name = path
+            .as_ref()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let ext = path
+            .as_ref()
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        let connection = self.connect()?;
+        let tx = connection.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO files(path,file_name,ext,content_hash,size_bytes,mtime,chunk_count,status,last_indexed,error) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,'indexed',?8,NULL) \
+             ON CONFLICT(path) DO UPDATE SET file_name=excluded.file_name,ext=excluded.ext, \
+             content_hash=excluded.content_hash,size_bytes=excluded.size_bytes,mtime=excluded.mtime, \
+             chunk_count=excluded.chunk_count,status='indexed',last_indexed=excluded.last_indexed,error=NULL",
+            params![normalized, file_name, ext, content_hash, size_bytes.min(i64::MAX as u64) as i64,
+                modified_seconds, chunks.len().min(i64::MAX as usize) as i64, unix_time()?],
+        )?;
+        let file_id: i64 = tx.query_row(
+            "SELECT file_id FROM files WHERE path=?1",
+            [&normalized],
+            |row| row.get(0),
+        )?;
+        tx.execute("DELETE FROM chunks WHERE file_id=?1", [file_id])?;
+        for (index, chunk) in chunks.iter().enumerate() {
+            let chunk_id = Uuid::new_v4().to_string();
+            let token_count = chunk.text.split_whitespace().count().min(i64::MAX as usize) as i64;
+            tx.execute(
+                "INSERT INTO chunks(chunk_id,file_id,chunk_index,page_or_line,heading,snippet,token_count,vector_id) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,NULL)",
+                params![chunk_id,file_id,index.min(i64::MAX as usize) as i64,chunk.page_or_line,chunk.heading,chunk.text,token_count],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove a file and its chunks; foreign-key cascade handles dependent rows.
+    pub fn delete_file(&self, path: impl AsRef<Path>) -> Result<bool, StorageError> {
+        let normalized = normalize_path(path.as_ref())?;
+        let connection = self.connect()?;
+        Ok(connection.execute("DELETE FROM files WHERE path=?1", [normalized])? > 0)
+    }
+
+    /// Search indexed paths and snippets using parameterized substring matches.
+    pub fn search_lexical(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StorageError> {
+        let query = query.trim();
+        if query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT c.chunk_id,f.path,f.file_name,c.snippet,c.page_or_line,c.heading \
+             FROM chunks c JOIN files f ON f.file_id=c.file_id \
+             WHERE f.status='indexed' AND (c.snippet LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR f.file_name LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
+             ORDER BY CASE WHEN f.file_name LIKE ?1 ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, length(c.snippet) \
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(
+            params![pattern, limit.min(i64::MAX as usize) as i64],
+            |row| {
+                Ok(SearchHit {
+                    chunk_id: row.get(0)?,
+                    path: row.get(1)?,
+                    file_name: row.get(2)?,
+                    snippet: row.get(3)?,
+                    page_or_line: row.get(4)?,
+                    heading: row.get(5)?,
+                    score: 1.0,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Return ready events in oldest-first order without acknowledging them.
@@ -599,5 +749,51 @@ mod tests {
         assert_eq!(db.command_record(&id).unwrap().unwrap().status, "blocked");
         assert!(!db.decide_command(&id, true).unwrap());
         assert!(db.claim_approved_command(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn directory_lookup_observes_component_boundaries() {
+        let (temp, db) = database();
+        let root = temp.path().join("docs");
+        let inside = root.join("notes.txt");
+        let prefix_collision = temp.path().join("docs-old/notes.txt");
+        db.enqueue_dirty(&inside, DirtyOperation::Upsert).unwrap();
+        db.enqueue_dirty(&prefix_collision, DirtyOperation::Upsert)
+            .unwrap();
+        assert_eq!(
+            db.paths_under(&root).unwrap(),
+            vec![normalize_path(&inside).unwrap()]
+        );
+    }
+
+    #[test]
+    fn replaces_file_chunks_searches_and_cascades_delete() {
+        let (dir, db) = database();
+        let path = dir.path().join("notes.md");
+        let chunks = vec![ChunkInput {
+            text: "the quick brown fox".into(),
+            page_or_line: None,
+            heading: Some("Animals".into()),
+        }];
+        db.replace_file(&path, "hash-a", 19, 1.0, &chunks).unwrap();
+        let hits = db.search_lexical("QUICK", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].heading.as_deref(), Some("Animals"));
+        db.replace_file(
+            &path,
+            "hash-b",
+            5,
+            2.0,
+            &[ChunkInput {
+                text: "fresh content".into(),
+                page_or_line: None,
+                heading: None,
+            }],
+        )
+        .unwrap();
+        assert!(db.search_lexical("quick", 10).unwrap().is_empty());
+        assert_eq!(db.search_lexical("fresh", 10).unwrap().len(), 1);
+        assert!(db.delete_file(&path).unwrap());
+        assert!(db.search_lexical("fresh", 10).unwrap().is_empty());
     }
 }
