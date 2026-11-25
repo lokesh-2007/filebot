@@ -1,5 +1,16 @@
 # Changelog
 
+## Rust desktop responsiveness 0.10.1 — 2026-11-25
+
+- Run local SQLite search on a background thread so index size does not block
+  avatar and popover input.
+- Display the current lifecycle state and Windows working-set memory in the
+  popover status row; keep per-turn latency metrics visible after streaming.
+- Start the bounded dirty-queue index worker so changed files become searchable
+  without activating the ONNX embedding model.
+- Verified with offline Rust core and desktop type-checks, formatting, and
+  warning-free Clippy. Windows CI verifies tests and the native desktop crate.
+
 ## Rust migration desktop preview 0.10.0 — 2026-11-25
 
 - Add a separate, low-overhead Win32 desktop shell with a draggable corner

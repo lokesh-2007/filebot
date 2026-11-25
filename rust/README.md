@@ -44,7 +44,9 @@ application passes the Windows UI and performance gates below.
 - A separate `rust/desktop` crate provides a compact Win32 avatar and popover,
   configurable global hotkey, streamed chat with cancellation, local lexical
   search, visible pending-command approval controls, and a bounded UI event
-  queue/transcript. Its UI uses no browser or Qt runtime.
+  queue/transcript. Search and indexing run off the UI thread; the status row
+  displays lifecycle state and process working-set RAM. Its UI uses no browser
+  or Qt runtime.
 
 Build and run the Rust core tests from the repository root with Rust 1.92 or newer:
 

@@ -30,6 +30,10 @@ use windows_sys::Win32::{
         DrawTextW, EndPaint, FillRect, InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT,
     },
     System::LibraryLoader::GetModuleHandleW,
+    System::{
+        ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+        Threading::GetCurrentProcess,
+    },
     UI::{
         Input::KeyboardAndMouse::{
             MOD_ALT, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, UnregisterHotKey, VK_SPACE,
@@ -61,6 +65,7 @@ const ID_APPROVE: usize = 106;
 const ID_REJECT: usize = 107;
 const ID_PENDING: usize = 108;
 const ID_EXIT: usize = 109;
+const ID_STATUS: usize = 110;
 
 type Runtime = BotRuntime<LocalOllamaClient, FileBotTools>;
 type Lifecycle = LifecycleManager<Runtime>;
@@ -81,12 +86,14 @@ struct AppState {
     popover: HWND,
     prompt: HWND,
     output: HWND,
+    status_label: HWND,
     pending_label: HWND,
     busy: bool,
     searching: bool,
     cancel: Arc<AtomicBool>,
     pending_id: Option<String>,
     last_pending_refresh: Instant,
+    last_status_refresh: Instant,
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -191,10 +198,12 @@ unsafe extern "system" fn window_proc(
             ID_OUTPUT,
             WS_BORDER | ES_MULTILINE as u32 | ES_READONLY as u32 | WS_VSCROLL | WS_HSCROLL,
             14,
-            54,
+            80,
             717,
-            300,
+            274,
         );
+        state.status_label =
+            create_control(hwnd, "STATIC", "Starting…", ID_STATUS, 0, 14, 54, 717, 20);
         state.pending_label = create_control(
             hwnd,
             "STATIC",
@@ -333,6 +342,10 @@ unsafe extern "system" fn window_proc(
                     InvalidateRect(state.avatar, std::ptr::null(), 0);
                 }
             }
+            if state.last_status_refresh.elapsed() >= Duration::from_secs(1) {
+                refresh_status(state);
+                state.last_status_refresh = Instant::now();
+            }
             0
         }
         WM_CLOSE => {
@@ -447,6 +460,36 @@ fn refresh_pending(state: &mut AppState) {
                 SetWindowTextW(state.pending_label, wide.as_ptr());
             }
         }
+    }
+}
+
+fn refresh_status(state: &AppState) {
+    let lifecycle = match state.lifecycle.state() {
+        LifecycleState::Sleeping => "Sleeping",
+        LifecycleState::Active => "Active",
+    };
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    let process = unsafe { GetCurrentProcess() };
+    let memory_ok = unsafe { K32GetProcessMemoryInfo(process, &mut counters, counters.cb) } != 0;
+    let memory = if memory_ok {
+        format!(
+            " · working set {} MB",
+            counters.WorkingSetSize / (1024 * 1024)
+        )
+    } else {
+        String::new()
+    };
+    let pending = if state.pending_id.is_some() {
+        " · command pending approval"
+    } else {
+        ""
+    };
+    let text = wide(&format!("{lifecycle}{memory}{pending}"));
+    unsafe {
+        SetWindowTextW(state.status_label, text.as_ptr());
     }
 }
 
@@ -684,12 +727,14 @@ fn run() -> Result<(), String> {
         popover: std::ptr::null_mut(),
         prompt: std::ptr::null_mut(),
         output: std::ptr::null_mut(),
+        status_label: std::ptr::null_mut(),
         pending_label: std::ptr::null_mut(),
         busy: false,
         searching: false,
         cancel: Arc::new(AtomicBool::new(false)),
         pending_id: None,
         last_pending_refresh: Instant::now(),
+        last_status_refresh: Instant::now(),
     });
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     register_class(CLASS, window_proc, instance)?;
