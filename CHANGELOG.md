@@ -86,6 +86,14 @@ versions may still change behavior while the Windows release is stabilized.
   clippy. Measure real Windows latency/RAM and resolve the CI check before
   calling these defaults validated.
 
+## Rust migration core 0.8.1 — 2026-11-25
+
+- Canonicalize existing files and parent directories before forming SQLite path
+  keys, resolving Windows short-name aliases so indexing, updates, and deletes
+  address one record.
+- Correct Windows path assertions and retain a saturation-path regression test.
+- Verified with 50 Rust tests, formatting, and warning-free clippy on Windows.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

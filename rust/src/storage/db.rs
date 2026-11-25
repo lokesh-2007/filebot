@@ -789,8 +789,21 @@ fn normalize_path(path: &Path) -> Result<String, StorageError> {
     } else {
         std::env::current_dir()?.join(path)
     };
+    // Resolve existing aliases (including Windows 8.3 short names) before using
+    // paths as SQLite keys. For a deleted file, canonicalize its parent and join
+    // the missing name so watcher and parser paths converge on one key.
+    let resolved = if absolute.exists() {
+        absolute.canonicalize().unwrap_or_else(|_| absolute.clone())
+    } else if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
+        parent
+            .canonicalize()
+            .map(|parent| parent.join(name))
+            .unwrap_or_else(|_| absolute.clone())
+    } else {
+        absolute.clone()
+    };
     let mut normalized = PathBuf::new();
-    for component in absolute.components() {
+    for component in resolved.components() {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {

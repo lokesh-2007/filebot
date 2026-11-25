@@ -274,17 +274,7 @@ mod tests {
         db.enqueue_dirty(&file, DirtyOperation::Delete).unwrap();
         let queued = db.pending_dirty(10).unwrap();
         assert_eq!(queued.len(), 1);
-        let path_key = |value: &str| {
-            let value = value
-                .strip_prefix(r"\\?\UNC\")
-                .map(|rest| format!(r"\\{rest}"))
-                .or_else(|| value.strip_prefix(r"\\?\").map(str::to_owned))
-                .unwrap_or_else(|| value.to_owned());
-            value.replace('/', "\\").to_ascii_lowercase()
-        };
-        let queued_key = path_key(&queued[0].path);
-        let indexed_key = path_key(&hit[0].path);
-        assert_eq!(queued_key, indexed_key, "path keys should agree on Windows");
+        assert_eq!(queued[0].path, hit[0].path, "path keys should be canonical");
         assert_eq!(worker.drain(10, None).unwrap(), 1);
         assert!(db.search_lexical("Needle", 5).unwrap().is_empty());
     }

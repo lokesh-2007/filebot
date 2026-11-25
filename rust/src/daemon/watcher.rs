@@ -461,9 +461,19 @@ mod tests {
 
         let dirty = db.pending_dirty(10).unwrap();
         assert_eq!(dirty.len(), 1);
+        let canonical = queued
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let expected = canonical
+            .strip_prefix(r"\\?\UNC\")
+            .map(|rest| format!(r"\\{rest}"))
+            .or_else(|| canonical.strip_prefix(r"\\?\").map(str::to_owned))
+            .unwrap_or(canonical);
         assert_eq!(
-            dirty[0].path.to_ascii_lowercase(),
-            queued.to_string_lossy().to_ascii_lowercase()
+            dirty[0].path, expected,
+            "overflow paths should be normalized before persistence"
         );
     }
 
