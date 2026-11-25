@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import logging
+import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -12,6 +14,30 @@ from retrieval.parsers import parse_file
 from storage.db import Database
 
 log = logging.getLogger(__name__)
+
+_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
+_THREAD_MODE_BACKGROUND_END = 0x00020000
+
+
+def _set_current_thread_background_mode(enabled: bool) -> bool:
+    """Lower this worker's Windows CPU and I/O priority while it indexes."""
+    if os.name != "nt":
+        return False
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_current_thread = kernel32.GetCurrentThread
+        get_current_thread.restype = ctypes.c_void_p
+        set_thread_priority = kernel32.SetThreadPriority
+        set_thread_priority.argtypes = (ctypes.c_void_p, ctypes.c_int)
+        set_thread_priority.restype = ctypes.c_int
+        mode = _THREAD_MODE_BACKGROUND_BEGIN if enabled else _THREAD_MODE_BACKGROUND_END
+        if set_thread_priority(get_current_thread(), mode):
+            return True
+        error = ctypes.get_last_error()
+        log.warning("Could not change index worker background priority (Windows error %d)", error)
+    except (AttributeError, OSError) as exc:
+        log.warning("Could not change index worker background priority: %s", exc)
+    return False
 
 
 def _same_file_revision(left: Any, right: Any) -> bool:
@@ -93,6 +119,9 @@ class IndexWorker:
                         max_docx_uncompressed_bytes=int(
                             config.get("max_docx_uncompressed_bytes", 100_000_000)
                         ),
+                        source_parse_timeout_ms=min(5_000, max(
+                            1, int(config.get("source_parse_timeout_ms", 250)),
+                        )),
                     )
                     parsed_stat = path.stat()
                     if not _same_file_revision(hashed_stat, parsed_stat):
@@ -142,13 +171,18 @@ class IndexQueueService:
         self._thread.start()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                processed = self.worker.drain(self.batch_size, stop_event=self._stop)
-            except Exception:
-                log.exception("Background index batch failed")
-                processed = 0
-            self._stop.wait(0.05 if processed else self.poll_seconds)
+        background_mode = _set_current_thread_background_mode(True)
+        try:
+            while not self._stop.is_set():
+                try:
+                    processed = self.worker.drain(self.batch_size, stop_event=self._stop)
+                except Exception:
+                    log.exception("Background index batch failed")
+                    processed = 0
+                self._stop.wait(0.05 if processed else self.poll_seconds)
+        finally:
+            if background_mode:
+                _set_current_thread_background_mode(False)
 
     def stop(self) -> None:
         """Finish the current bounded batch and wait for the queue thread to stop."""

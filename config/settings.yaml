@@ -12,6 +12,35 @@ index:
     - .md
     - .pdf
     - .docx
+    - .py
+    - .pyi
+    - .rs
+    - .js
+    - .jsx
+    - .mjs
+    - .cjs
+    - .ts
+    - .tsx
+    - .go
+    - .java
+    - .c
+    - .h
+    - .cc
+    - .cpp
+    - .cxx
+    - .hpp
+    - .hh
+    - .cs
+    - .rb
+    - .php
+    - .sh
+    - .bash
+    - .ps1
+    - .json
+    - .yaml
+    - .yml
+    - .toml
+    - .sql
   exclude_dirs:
     - .git
     - .venv
@@ -19,11 +48,16 @@ index:
   max_file_bytes: 52428800
   max_extracted_chars: 5000000
   max_docx_uncompressed_bytes: 100000000
+  source_parse_timeout_ms: 250
   chunk_chars: 1200
   chunk_overlap: 150
   debounce_seconds: 1.0
   background_batch_size: 10
   background_poll_seconds: 1.0
+
+# Optional search shorthand. For example, map "spec" to "product specification".
+retrieval:
+  glossary: {}
 
 models:
   ollama:
@@ -31,6 +65,9 @@ models:
     # Nanobot's Ollama provider uses the OpenAI-compatible endpoint.
     api_base: "http://127.0.0.1:11434/v1"
     model: qwen2.5-coder:3b
+    # Start the lightweight server only when Ask is used; the model stays lazy.
+    auto_start: true
+    startup_timeout_seconds: 30
     # Keep the model warm between quick turns; the lifecycle manager sends 0 on sleep.
     keep_alive: "2m"
     # Bound context and generated tokens to control inference RAM and response latency.

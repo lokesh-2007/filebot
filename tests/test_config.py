@@ -19,8 +19,35 @@ class ConfigTests(unittest.TestCase):
     def test_shipped_settings_load_and_expand_environment_path(self) -> None:
         settings = load_settings(ROOT / "config" / "settings.yaml")
         self.assertEqual(settings["models"]["ollama"]["model"], "qwen2.5-coder:3b")
+        self.assertTrue(settings["models"]["ollama"]["auto_start"])
+        self.assertEqual(settings["models"]["ollama"]["startup_timeout_seconds"], 30)
+        self.assertEqual(settings["retrieval"]["glossary"], {})
         with patch.dict(os.environ, {"FILEBOT_TEST_ROOT": str(ROOT)}):
             self.assertEqual(expand_config_path("%FILEBOT_TEST_ROOT%/data"), ROOT / "data")
+
+    def test_invalid_ollama_autostart_settings_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["models"]["ollama"]["auto_start"] = "yes"
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "auto_start.*true or false"):
+                load_settings(path)
+
+            settings["models"]["ollama"]["auto_start"] = True
+            settings["models"]["ollama"]["startup_timeout_seconds"] = 0
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "startup_timeout_seconds.*integer"):
+                load_settings(path)
+
+    def test_invalid_search_glossary_settings_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["retrieval"]["glossary"] = {"spec": ""}
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "retrieval.glossary"):
+                load_settings(path)
 
     def test_invalid_settings_report_missing_section(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:

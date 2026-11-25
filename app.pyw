@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
+from daemon.metrics import process_working_set_mb
 from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
 from filebot_version import __version__
@@ -70,6 +71,9 @@ def main() -> int:
             bridge.start()
             watcher.start()
             avatar.show()
+            working_set = process_working_set_mb()
+            if working_set is not None:
+                logging.info("FileBot dormant startup working set: %.1f MiB", working_set)
         except Exception:
             watcher.stop()
             bridge.stop()

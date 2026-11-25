@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import math
 import re
 import threading
 from pathlib import Path
@@ -18,6 +19,9 @@ class HybridEngine:
     """Owns heavy embedding/search objects only while the assistant is awake."""
     def __init__(self, settings: dict[str, Any], db: Database) -> None:
         self.settings, self.db = settings, db
+        glossary = settings.get("retrieval", {}).get("glossary", {})
+        if glossary:
+            self.db.seed_glossary_entries(glossary)
         self.roots = [expand_config_path(root) for root in settings.get("index", {}).get("roots", [])]
         self._restrict_roots = "roots" in settings.get("index", {})
         self._embedder = self._collection = self._client = None
@@ -108,7 +112,17 @@ class HybridEngine:
             for rank, chunk_id in enumerate(ranking, 1):
                 scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank)
         results: list[dict[str, Any]] = []
-        for chunk_id, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]:
+        adjusted: list[tuple[str, float]] = []
+        for chunk_id, score in scores.items():
+            row = lookup.get(chunk_id)
+            if row is not None and "open_count" in row.keys():
+                opens = max(0, int(row["open_count"]))
+                upvotes = max(0, int(row["upvotes"]))
+                downvotes = max(0, int(row["downvotes"]))
+                score += max(-0.01, min(0.008, 0.001 * math.log1p(opens)
+                                         + 0.003 * (upvotes - downvotes)))
+            adjusted.append((chunk_id, score))
+        for chunk_id, score in sorted(adjusted, key=lambda item: item[1], reverse=True)[:limit]:
             row = lookup.get(chunk_id)
             results.append({
                 "path": row["path"] if row else "",
@@ -121,7 +135,9 @@ class HybridEngine:
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock:
-            return self._search_locked(query, limit)
+            expand = getattr(self.db, "expand_glossary", None)
+            expanded_query = expand(query) if callable(expand) else query
+            return self._search_locked(expanded_query, limit)
 
     def _search_locked(self, query: str, limit: int) -> list[dict[str, Any]]:
         normalized_query = query.strip()
@@ -170,20 +186,27 @@ class HybridEngine:
     def _search_short_token(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Rank exact short-token hits in the already-loaded SQLite chunk rows."""
         pattern = re.compile(rf"(?<!\w){re.escape(query)}(?!\w)", re.IGNORECASE)
-        matches: list[tuple[int, int, Any]] = []
+        matches: list[tuple[int, float, int, Any]] = []
         for position, row in enumerate(self._rows or []):
             text = f"{row['file_name']}\n{row['snippet']}"
             count = sum(1 for _ in pattern.finditer(text))
             if count:
-                matches.append((count, position, row))
-        matches.sort(key=lambda item: (-item[0], item[1]))
+                boost = 0.0
+                if "open_count" in row.keys():
+                    boost = max(-0.01, min(
+                        0.008,
+                        0.001 * math.log1p(max(0, int(row["open_count"])))
+                        + 0.003 * (int(row["upvotes"]) - int(row["downvotes"])),
+                    ))
+                matches.append((count, boost, position, row))
+        matches.sort(key=lambda item: (-item[0], -item[1], item[2]))
         return [{
             "path": row["path"],
             "snippet": row["snippet"],
-            "score": count / (count + 1.0),
+            "score": count / (count + 1.0) + boost,
             "page_or_line": row["page_or_line"],
             "heading": row["heading"],
-        } for count, _, row in matches[:max(0, limit)]]
+        } for count, boost, _, row in matches[:max(0, limit)]]
 
     def close(self) -> None:
         """Release references to all heavyweight objects so they can unload."""

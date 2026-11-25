@@ -13,6 +13,18 @@ class FastRouter:
         r"|\b(?:open|view)\s+[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
         re.I,
     )
+    _open_target = re.compile(
+        r"\b(?:open|view|show)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?[\"']?"
+        r"([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
+        re.I,
+    )
+
+    def open_target(self, prompt: str) -> str | None:
+        """Extract an explicitly named file for safe, model-free opening."""
+        match = self._open_target.search(prompt.strip())
+        if match is None:
+            return None
+        return match.group(1).strip().rstrip(".,;") or None
 
     def route(self, prompt: str) -> str:
         """Return cmd, search, open, or chat; CMD intent only proposes for approval."""

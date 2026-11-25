@@ -11,20 +11,26 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget
+from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QTableWidget, QWidget
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
+from daemon.metrics import process_working_set_mb
 from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
+from storage.db import Database
 
 
 class LifecycleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_working_set_metrics_degrade_cleanly_off_windows(self) -> None:
+        with patch("daemon.metrics.os.name", "posix"):
+            self.assertIsNone(process_working_set_mb())
 
     def test_idle_unload_waits_for_all_active_work(self) -> None:
         manager = LifecycleManager({"runtime": {"idle_unload_seconds": 60}}, None, Path.cwd())
@@ -39,6 +45,31 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(manager._busy)
         self.assertTrue(manager.idle.isActive())
         manager.idle.stop()
+
+    def test_wake_shows_loading_popover_before_runtime_initialization(self) -> None:
+        class DelayedWakeWorker(QObject):
+            ready = pyqtSignal(object, object, str)
+            finished = pyqtSignal()
+
+            def start(self) -> None:
+                pass
+
+            def isRunning(self) -> bool:
+                return False
+
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        manager = LifecycleManager({"runtime": {"idle_unload_seconds": 60}}, FakeDatabase(), Path.cwd())
+        with patch("daemon.lifecycle_manager._WakeWorker", return_value=DelayedWakeWorker()):
+            manager.wake()
+
+        self.assertIsNotNone(manager.popover)
+        self.assertIn("Loading the local search index", manager.popover.answer.toPlainText())
+        self.assertFalse(manager.popover.input.isEnabled())
+        self.assertFalse(manager.popover.search_button.isEnabled())
+        manager.shutdown()
 
     def test_instance_guard_allows_only_one_process_owner(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
@@ -146,6 +177,70 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("10 seconds", card.answer.toPlainText())
         self.assertIn("Ollama loads the model", card.answer.toPlainText())
         card.close()
+
+    def test_chat_can_be_cancelled_without_blocking_the_popover(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        class CancellableRuntime:
+            def __init__(self) -> None:
+                self.release = threading.Event()
+                self.cancelled = threading.Event()
+
+            def ask(self, prompt: str) -> str:
+                self.release.wait(timeout=2)
+                return "Request cancelled" if self.cancelled.is_set() else "Answer received"
+
+            def cancel_pending(self) -> bool:
+                self.cancelled.set()
+                self.release.set()
+                return True
+
+        runtime = CancellableRuntime()
+        card = PopoverCard(engine=None, runtime=runtime, db=FakeDatabase())
+        card.input.setText("hello")
+        card.submit()
+        self.assertTrue(card.stop_button.isEnabled())
+        QTest.mouseClick(card.stop_button, Qt.MouseButton.LeftButton)
+        deadline = time.monotonic() + 2
+        while card._task is not None and card._task.isRunning() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertTrue(runtime.cancelled.is_set())
+        self.assertFalse(card.stop_button.isEnabled())
+        self.assertEqual(card.answer.toPlainText(), "Request cancelled")
+        card.close()
+
+    def test_glossary_editor_saves_changes_through_the_dialog(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            db = Database(Path(directory) / "state.sqlite3")
+            db.initialize()
+            db.seed_glossary_entries({"spec": "product specification"})
+            card = PopoverCard(engine=None, runtime=None, db=db)
+
+            def edit_and_save() -> None:
+                dialog = self.app.activeModalWidget()
+                table = dialog.findChild(QTableWidget)
+                table.item(0, 1).setText("technical specification")
+                table.insertRow(1)
+                from PyQt6.QtWidgets import QTableWidgetItem
+                table.setItem(1, 0, QTableWidgetItem("api"))
+                table.setItem(1, 1, QTableWidgetItem("application programming interface"))
+                buttons = dialog.findChild(QDialogButtonBox)
+                buttons.button(QDialogButtonBox.StandardButton.Save).click()
+
+            QTimer.singleShot(0, edit_and_save)
+            card.edit_glossary()
+
+            self.assertEqual(
+                db.glossary_entries(),
+                [("api", "application programming interface"), ("spec", "technical specification")],
+            )
+            self.assertEqual(db.expand_glossary("SPEC API"),
+                             "technical specification application programming interface")
+            card.close()
 
     def test_popover_displays_chat_text_before_the_turn_finishes(self) -> None:
         class FakeDatabase:

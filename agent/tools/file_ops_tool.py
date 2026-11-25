@@ -25,3 +25,6 @@ class FileOpsTool:
         if self.db is not None and self.db.get_file(file) is None:
             raise PermissionError("File is not in FileBot's local index")
         os.startfile(str(file))  # type: ignore[attr-defined]
+        record_open = getattr(self.db, "record_file_open", None)
+        if callable(record_open):
+            record_open(file)

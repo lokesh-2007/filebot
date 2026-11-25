@@ -1,5 +1,88 @@
 # Changelog
 
+## Responsive local assistant improvements 0.6.7 — 2026-11-25
+
+- Add an in-app glossary editor with add/remove controls and transactional
+  SQLite replacement; user edits remain authoritative across restarts.
+- Seed configured aliases once, so deleted aliases are not restored at wake.
+- Correct Tree-sitter integration to use the pinned package's offline registry
+  check and bounded processing API; fix the C# grammar's canonical name.
+- Add a Stop control that cancels an active streamed/model request without
+  blocking the popover; hide it for local-only search turns.
+- Log request duration and time-to-first-token in the rotating local log without
+  recording prompts, snippets, or model output.
+- Log wake initialization time and Windows working-set snapshots after dormant
+  startup, wake, and idle unload to support on-device tuning.
+- Verify glossary persistence, source chunk metadata, offline parser fallback,
+  and background indexing priority with focused tests.
+
+## Source indexing and queue priority 0.6.6 — 2026-11-25
+
+- Add bounded Tree-sitter syntax-aware chunks for common source/config languages,
+  including line ranges and symbol headings. Cache grammars during setup; at
+  runtime, check local parser availability first and never download on wake.
+- Add the configured code extensions and parser deadline, with bounded text
+  fallback when a selected grammar is not cached or parsing fails.
+- Run the indexing worker in Windows background CPU and I/O priority mode and
+  restore normal priority when the worker exits.
+- Verify parser bounds, offline fallback, background-priority cleanup, and the
+  existing watcher/index retry behavior with focused tests.
+
+## Faster wake feedback 0.6.5 — 2026-11-25
+
+- Show the popover immediately while retrieval resources initialize in the
+  background, then attach search/chat services to the same card when ready.
+- Gate requests during startup with a clear loading message and dismiss the
+  loading card cleanly on cancel or initialization failure.
+- Verify the behavior with the full Qt lifecycle test suite.
+
+## Responsiveness and on-demand chat 0.10.2 / 0.6.4 — 2026-11-25
+
+- Route obvious file searches in Ask directly to the local index. This avoids
+  Ollama startup and agent overhead for a request the index can already answer.
+- Open explicitly named indexed files directly through the safe root/index
+  checks, avoid the model for that common action, and show choices for duplicate
+  basenames. Persist successful opens and Helpful/Not helpful feedback as bounded
+  retrieval ranking signals.
+- Expand configured personal shorthand through SQLite's glossary table before
+  retrieval while preserving exact-token matching and hybrid relevance.
+- Keep queue draining in the background index worker instead of synchronously
+  processing up to 100 files before returning search results.
+- Start the Windows Ollama server on the first model-backed request when enabled
+  in settings, then report a bounded startup timeout or a missing model clearly.
+- Fix frameless avatar clicks and add a root-checked open action for Rust search
+  results. Search remains available without loading the language model.
+- Focused Python runtime/config checks pass; Rust formatting, check, and Clippy
+  pass. Full local Python discovery remains subject to the managed Windows
+  loopback socket restriction; CI runs the supported Python 3.11/3.12 matrix.
+
+## Rust desktop responsiveness 0.10.1 — 2026-11-25
+
+- Run local SQLite search on a background thread so index size does not block
+  avatar and popover input.
+- Display the current lifecycle state and Windows working-set memory in the
+  popover status row; keep per-turn latency metrics visible after streaming.
+- Start the bounded dirty-queue index worker so changed files become searchable
+  without activating the ONNX embedding model.
+- Verified with offline Rust core and desktop type-checks, formatting, and
+  warning-free Clippy. Windows CI verifies tests and the native desktop crate.
+
+## Rust migration desktop preview 0.10.0 — 2026-11-25
+
+- Add a separate, low-overhead Win32 desktop shell with a draggable corner
+  avatar, configurable hotkey, popover search/chat UI, streamed output,
+  cancellation, and explicit command approval/rejection controls. Start the
+  bounded SQLite dirty-queue index worker so newly watched files become
+  searchable without loading the embedding model.
+- Keep chat/runtime calls off the UI thread, cap pending UI events and visible
+  transcript memory, run SQLite search away from the window thread, and poll
+  command state at a bounded interval.
+- Show first-token, Ollama preflight, and total turn timings in the popover to
+  make latency tuning observable without logging prompt or response text.
+- Add a Windows CI type-check and clippy gate for the desktop crate. Offline
+  `cargo check` and warning-free clippy pass; live Windows UI and working-set
+  measurements remain outstanding.
+
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 

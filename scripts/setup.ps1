@@ -37,6 +37,8 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { throw "Could not upgrade pip." }
 & $python -m pip install -r (Join-Path $projectRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Could not install FileBot requirements." }
+& $python (Join-Path $projectRoot "scripts\prefetch_source_grammars.py")
+if ($LASTEXITCODE -ne 0) { throw "Could not cache source parsers for offline indexing." }
 
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
 if ($null -eq $ollama) {

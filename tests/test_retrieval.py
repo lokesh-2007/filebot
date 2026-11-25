@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+import sys
+from types import ModuleType
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,8 +34,84 @@ class ReciprocalRankFusionTests(unittest.TestCase):
         self.assertEqual(result[0]["page_or_line"], "page 4")
         self.assertEqual(result[0]["heading"], "Summary")
 
+    def test_user_feedback_boosts_retrieval_without_overwhelming_relevance(self) -> None:
+        rows = [
+            {"chunk_id": "a", "path": "a.txt", "snippet": "candidate a", "page_or_line": None,
+             "heading": None, "open_count": 0, "upvotes": 0, "downvotes": 0},
+            {"chunk_id": "b", "path": "b.txt", "snippet": "candidate b", "page_or_line": None,
+             "heading": None, "open_count": 1, "upvotes": 1, "downvotes": 0},
+        ]
+        result = HybridEngine.reciprocal_rank_fusion(["a", "b"], [], rows, 2)
+        self.assertEqual([item["path"] for item in result], ["b.txt", "a.txt"])
+
 
 class ParserResourceLimitTests(unittest.TestCase):
+    def test_tree_sitter_chunks_source_by_syntax_nodes_with_line_context(self) -> None:
+        class Registry:
+            def has_parser(self, language):
+                return language == "python"
+
+            def process(self, source, config):
+                self.source, self.config = source, config
+                first = source.index("def first")
+                second = source.index("def second")
+                self.result = SimpleNamespace(chunks=[
+                    SimpleNamespace(content=source[first:second], start_line=0, end_line=2,
+                                    metadata=SimpleNamespace(symbols_defined=["first"])),
+                    SimpleNamespace(content=source[second:], start_line=4, end_line=6,
+                                    metadata=SimpleNamespace(symbols_defined=["second"])),
+                ])
+                return self.result
+
+        class LanguageRegistry:
+            registry = Registry()
+
+            @classmethod
+            def default(cls):
+                return cls.registry
+
+        module = ModuleType("tree_sitter_language_pack")
+        module.LanguageRegistry = LanguageRegistry
+        module.ProcessConfig = lambda **kwargs: SimpleNamespace(**kwargs)
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "example.py"
+            source = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
+            path.write_text(source, encoding="utf-8")
+            with patch.dict(sys.modules, {"tree_sitter_language_pack": module}):
+                chunks = parse_file(path, chunk_chars=100, overlap=10, source_parse_timeout_ms=75)
+
+        self.assertEqual(LanguageRegistry.registry.config.parse_timeout_ms, 75)
+        self.assertEqual(LanguageRegistry.registry.config.chunk_max_size, 100)
+        self.assertEqual(len(chunks), 2)
+        self.assertIn("def first", chunks[0].text)
+        self.assertIn("def second", chunks[1].text)
+        self.assertEqual(chunks[0].page_or_line, "lines 1-3")
+        self.assertEqual(chunks[1].heading, "second")
+
+    def test_missing_cached_tree_sitter_grammar_falls_back_without_download(self) -> None:
+        class Registry:
+            def has_parser(self, _language):
+                return False
+
+            def process(self, *_args, **_kwargs):
+                self.fail("uncached grammars must not trigger downloads")
+
+        class LanguageRegistry:
+            @staticmethod
+            def default():
+                return Registry()
+
+        module = ModuleType("tree_sitter_language_pack")
+        module.LanguageRegistry = LanguageRegistry
+        module.ProcessConfig = lambda **kwargs: SimpleNamespace(**kwargs)
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "example.rs"
+            path.write_text("fn main() { println!(\"ok\"); }", encoding="utf-8")
+            with patch.dict(sys.modules, {"tree_sitter_language_pack": module}):
+                chunks = parse_file(path, chunk_chars=100, overlap=0)
+        self.assertIn("fn main", chunks[0].text)
+        self.assertEqual(chunks[0].page_or_line, "source")
+
     def test_text_parser_caps_extracted_characters(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             path = Path(directory) / "large.txt"
@@ -53,6 +132,17 @@ class ParserResourceLimitTests(unittest.TestCase):
 
 
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_engine_expands_database_glossary_before_retrieval(self) -> None:
+        class FakeDatabase:
+            def expand_glossary(self, query):
+                return query.replace("spec", "product specification")
+
+        engine = HybridEngine({}, FakeDatabase())
+        from unittest.mock import patch
+        with patch.object(engine, "_search_locked", return_value=[]) as search:
+            self.assertEqual(engine.search("spec", limit=4), [])
+        search.assert_called_once_with("product specification", 4)
+
     def test_lexical_refresh_hides_stale_rows_outside_current_roots(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             base = Path(directory)

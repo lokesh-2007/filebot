@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import time
 from typing import Any
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 from storage.db import Database
+from daemon.metrics import process_working_set_mb
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ class _WakeWorker(QThread):
         self.result: tuple[Any, Any] | None = None
 
     def run(self) -> None:
+        started = time.perf_counter()
         engine = runtime = None
         try:
             from retrieval.hybrid_engine import HybridEngine
@@ -30,6 +33,12 @@ class _WakeWorker(QThread):
             engine.activate()
             runtime = BotRuntime(self.settings, self.db, engine)
             self.result = (engine, runtime)
+            working_set = process_working_set_mb()
+            log.info(
+                "FileBot wake initialized in %.3fs; working_set=%s",
+                time.perf_counter() - started,
+                f"{working_set:.1f} MiB" if working_set is not None else "unavailable",
+            )
             self.ready.emit(engine, runtime, "")
         except Exception as exc:
             log.exception("Could not wake FileBot retrieval/agent services")
@@ -69,6 +78,8 @@ class LifecycleManager(QObject):
         if self._waking:
             self._cancel_wake = True
             self.status_changed.emit("sleep")
+            if self.popover is not None:
+                self.popover.hide()
         elif self._active:
             self.sleep()
         else:
@@ -86,6 +97,10 @@ class LifecycleManager(QObject):
         self._waking = True
         self._cancel_wake = False
         self.status_changed.emit("active")
+        from ui.popover_card import PopoverCard
+        self.popover = PopoverCard(None, None, self.db, loading=True)
+        self._connect_popover(self.popover)
+        self.popover_ready.emit(self.popover)
         self._wake_worker = _WakeWorker(self.settings, self.db)
         self._wake_worker.ready.connect(self._on_wake_ready)
         self._wake_worker.finished.connect(self._on_wake_finished)
@@ -94,6 +109,9 @@ class LifecycleManager(QObject):
     def _on_wake_ready(self, engine: Any, runtime: Any, error: str) -> None:
         self._waking = False
         if error:
+            if self.popover is not None:
+                self.popover.close()
+                self.popover = None
             self.status_changed.emit("sleep")
             self.error_occurred.emit(error)
             return
@@ -104,17 +122,20 @@ class LifecycleManager(QObject):
                         item.close()
                     except Exception:
                         log.exception("Could not release canceled wake resources")
+            if self.popover is not None:
+                self.popover.close()
+                self.popover = None
             self.status_changed.emit("sleep")
             return
         self.engine, self.runtime = engine, runtime
         self._active = True
         self.status_changed.emit("active")
-        from ui.popover_card import PopoverCard
-        self.popover = PopoverCard(self.engine, self.runtime, self.db)
-        self.popover.activity.connect(self.touch)
-        self.popover.work_started.connect(self.begin_work)
-        self.popover.work_finished.connect(self.end_work)
-        self.popover.status_changed.connect(self.set_status)
+        if self.popover is None:
+            from ui.popover_card import PopoverCard
+            self.popover = PopoverCard(self.engine, self.runtime, self.db)
+            self._connect_popover(self.popover)
+        else:
+            self.popover.set_runtime(self.engine, self.runtime)
         self.popover_ready.emit(self.popover)
         self.popover.show()
         from retrieval.index_worker import IndexQueueService
@@ -126,6 +147,13 @@ class LifecycleManager(QObject):
         )
         self._index_service.start()
         self.touch()
+
+    def _connect_popover(self, popover: Any) -> None:
+        """Connect user activity, busy accounting, and avatar state once."""
+        popover.activity.connect(self.touch)
+        popover.work_started.connect(self.begin_work)
+        popover.work_finished.connect(self.end_work)
+        popover.status_changed.connect(self.set_status)
 
     def _on_wake_finished(self) -> None:
         self._wake_worker = None
@@ -164,6 +192,7 @@ class LifecycleManager(QObject):
         self._finish_sleep()
 
     def _finish_sleep(self) -> None:
+        started = time.perf_counter()
         if self._index_service is not None:
             try:
                 self._index_service.stop()
@@ -176,12 +205,20 @@ class LifecycleManager(QObject):
                     item.close()
                 except Exception:
                     log.exception("Error while unloading FileBot component")
+        if self.popover is not None:
+            self.popover.close()
         self.runtime = self.engine = self.popover = None
         self._active = False
         self._busy = False
         self._busy_count = 0
         self._sleep_requested = False
         self.status_changed.emit("sleep")
+        working_set = process_working_set_mb()
+        log.info(
+            "FileBot idle unload completed in %.3fs; working_set=%s",
+            time.perf_counter() - started,
+            f"{working_set:.1f} MiB" if working_set is not None else "unavailable",
+        )
 
     def shutdown(self) -> None:
         self._shutting_down = True

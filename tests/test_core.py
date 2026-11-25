@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from agent.fast_router import FastRouter
 from agent.bot_runtime import BotRuntime, _ensure_filebot_instructions
@@ -132,6 +132,44 @@ class DatabaseTests(unittest.TestCase):
         result = self.db.search_lexical("storage engine")
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["path"], str(path.resolve()))
+
+    def test_open_and_feedback_signals_are_persisted(self) -> None:
+        path = self.root / "feedback.md"
+        self.db.replace_file(
+            path, content_hash="hash", size=1, mtime=1.0,
+            chunks=[{"text": "feedback example"}],
+        )
+        self.db.record_file_open(path)
+        self.assertTrue(self.db.record_file_feedback(path, "up"))
+        self.assertTrue(self.db.record_file_feedback(path, "down"))
+        self.assertFalse(self.db.record_file_feedback(self.root / "missing.md", "up"))
+        with self.db.connect() as connection:
+            signal = connection.execute(
+                "SELECT open_count,upvotes,downvotes,last_opened FROM file_signals "
+                "WHERE file_id=(SELECT file_id FROM files WHERE path=?)",
+                (str(path.resolve()),),
+            ).fetchone()
+        self.assertEqual((signal["open_count"], signal["upvotes"], signal["downvotes"]), (1, 1, 1))
+        self.assertIsNotNone(signal["last_opened"])
+
+    def test_search_glossary_expands_aliases_without_matching_inside_words(self) -> None:
+        self.db.set_glossary_entries({"spec": "product specification", "api": "application programming interface"})
+        self.assertEqual(
+            self.db.expand_glossary("SPEC for API inspection"),
+            "product specification for application programming interface inspection",
+        )
+        with self.assertRaisesRegex(ValueError, "glossary aliases"):
+            self.db.set_glossary_entries({" ": "invalid"})
+
+    def test_glossary_editor_replaces_rows_and_config_defaults_seed_only_once(self) -> None:
+        self.db.seed_glossary_entries({"spec": "product specification"})
+        self.assertEqual(self.db.glossary_entries(), [("spec", "product specification")])
+        self.db.replace_glossary_entries({"api": "application programming interface"})
+        self.db.seed_glossary_entries({"spec": "product specification"})
+        self.assertEqual(self.db.glossary_entries(), [("api", "application programming interface")])
+        with self.assertRaisesRegex(ValueError, "unique"):
+            self.db.replace_glossary_entries({"API": "one", "api": "two"})
+        self.assertEqual(self.db.glossary_entries(), [("api", "application programming interface")])
 
     def test_command_claim_is_single_use(self) -> None:
         proposal = self.db.stage_command("whoami", str(self.root), "test", "read_only")
@@ -320,7 +358,7 @@ class DatabaseTests(unittest.TestCase):
         runtime._start_async_loop()
         try:
             self.assertEqual(runtime.ask("Say hello"), "Hello")
-            self.assertEqual(runtime.ask("Find the meeting notes"), "Hello")
+            self.assertEqual(runtime.ask("Find the meeting notes"), [])
             self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
             self.assertEqual(runtime.ask("Run command whoami"), "Hello")
         finally:
@@ -328,9 +366,57 @@ class DatabaseTests(unittest.TestCase):
             runtime.close()
 
         self.assertEqual(bot.seen_tools, [
-            [], ["search_files"], ["open_file"], ["propose_cmd"],
+            [], ["open_file"], ["propose_cmd"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
+
+    def test_explicit_indexed_file_open_bypasses_model_and_records_signal(self) -> None:
+        file_path = self.root / "Project Notes.pdf"
+        file_path.write_bytes(b"indexed PDF placeholder")
+        self.db.replace_file(
+            file_path, content_hash="test-hash", size=file_path.stat().st_size,
+            mtime=file_path.stat().st_mtime,
+            chunks=[{"text": "Project notes summary", "page_or_line": "page 1"}],
+        )
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return []
+
+        runtime = BotRuntime({"index": {"roots": [str(self.root)]}}, self.db, FakeEngine())
+        with patch("agent.tools.file_ops_tool.os.startfile", create=True) as startfile, \
+                patch.object(runtime, "_check_ollama_ready") as check_ollama:
+            result = runtime.ask_streaming('Open "Project Notes.pdf"', lambda _delta: None)
+        self.assertEqual(result, f"Opened {file_path.resolve()}")
+        startfile.assert_called_once_with(str(file_path.resolve()))
+        check_ollama.assert_not_called()
+        with self.db.connect() as connection:
+            signal = connection.execute(
+                "SELECT open_count FROM file_signals WHERE file_id=(SELECT file_id FROM files WHERE path=?)",
+                (str(file_path.resolve()),),
+            ).fetchone()
+        self.assertEqual(signal["open_count"], 1)
+
+    def test_fast_router_extracts_quoted_and_bare_file_targets(self) -> None:
+        router = FastRouter()
+        self.assertEqual(router.open_target('Open "Project Notes.pdf" please'), "Project Notes.pdf")
+        self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
+        self.assertIsNone(router.open_target("Open the PDF document"))
+
+    def test_obvious_search_uses_index_without_ollama_or_model(self) -> None:
+        matches = [{"path": "C:/docs/notes.txt", "snippet": "meeting notes"}]
+
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return matches
+
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:3b",
+        }}}, self.db, FakeEngine())
+        with patch.object(runtime, "_check_ollama_ready") as check_ollama, \
+                patch.object(runtime.indexer, "drain") as drain:
+            self.assertEqual(runtime.ask_streaming("Find meeting notes", lambda _delta: None), matches)
+            check_ollama.assert_not_called()
+            drain.assert_not_called()
 
     def test_ollama_preflight_accepts_the_configured_installed_model(self) -> None:
         runtime = BotRuntime({"models": {"ollama": {
@@ -354,6 +440,22 @@ class DatabaseTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=URLError("connection refused")):
             with self.assertRaisesRegex(RuntimeError, "Start Ollama and try again"):
                 runtime._check_ollama_ready()
+
+    def test_ollama_preflight_starts_server_on_demand_then_retries(self) -> None:
+        from urllib.error import URLError
+
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:3b",
+            "auto_start": True, "startup_timeout_seconds": 3,
+        }}}, self.db, object())
+        with patch.object(runtime, "_ollama_tags", side_effect=[
+            URLError("connection refused"),
+            {"models": [{"name": "qwen2.5-coder:3b"}]},
+        ]) as tags, patch.object(runtime, "_start_ollama") as start, patch("agent.bot_runtime.time.sleep"):
+            runtime._check_ollama_ready()
+
+        start.assert_called_once_with()
+        self.assertEqual(tags.call_count, 2)
 
     def test_bot_runtime_streams_text_deltas_and_returns_final_result(self) -> None:
         class StreamingBot:
@@ -729,6 +831,18 @@ class IndexWorkerTests(unittest.TestCase):
             service.stop()
             self.assertEqual(db.pending_dirty(), [])
             self.assertEqual(db.get_file(file_path)["status"], "indexed")
+
+    def test_index_queue_enters_and_leaves_windows_background_priority(self) -> None:
+        class StoppingWorker:
+            def drain(self, limit, *, stop_event):
+                stop_event.set()
+                return 1
+
+        service = IndexQueueService(StoppingWorker(), batch_size=1, poll_seconds=0.01)
+        with patch("retrieval.index_worker._set_current_thread_background_mode",
+                   side_effect=[True, True]) as set_priority:
+            service._run()
+        self.assertEqual(set_priority.call_args_list, [call(True), call(False)])
 
 
 if __name__ == "__main__":

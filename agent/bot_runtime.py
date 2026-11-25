@@ -5,7 +5,11 @@ import asyncio
 from concurrent.futures import Future
 import json
 import logging
+import os
+import shutil
+import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,7 @@ from agent.ollama_tool_bridge import install_ollama_tool_bridge
 from agent.tools.cmd_proposal_tool import ProposeCmdTool
 from agent.tools.file_ops_tool import FileOpsTool
 from agent.tools.search_tool import SearchFilesTool
+from filebot_config import expand_config_path
 from executor.policy_engine import PolicyEngine
 from executor.cmd_runner import CommandRunner
 from storage.db import Database
@@ -79,6 +84,7 @@ class BotRuntime:
         self._active_future: Future[Any] | None = None
         self._turn_lock = threading.Lock()
         self._tool_registries: dict[str, Any] = {}
+        self._ollama_process: subprocess.Popen[bytes] | None = None
 
     def _start_async_loop(self) -> None:
         """Start one persistent event loop for Nanobot's awake lifetime."""
@@ -241,10 +247,8 @@ class BotRuntime:
     def _prepare_prompt(self, prompt: str) -> tuple[str, str]:
         """Apply local routing and add only the context needed for one turn."""
         intent = self.router.route(prompt)
-        if isinstance(self.settings.get("models"), dict):
+        if intent != "search" and isinstance(self.settings.get("models"), dict):
             self._check_ollama_ready()
-        if intent == "search":
-            self.indexer.drain(limit=100)
         self._activate()
         assert self.bot is not None
         if intent == "cmd":
@@ -258,22 +262,40 @@ class BotRuntime:
         return intent, prompt
 
     def _check_ollama_ready(self) -> None:
-        """Fail quickly with recovery steps when Ollama or its model is missing."""
-        from urllib.request import urlopen
-
+        """Start the local server on demand and verify the configured model exists."""
         ollama = self.settings.get("models", {}).get("ollama", {})
         base_url = str(ollama.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
         model = str(ollama.get("model", "qwen2.5-coder:3b"))
         try:
-            with urlopen(f"{base_url}/api/tags", timeout=4) as response:
-                payload = json.loads(response.read(1_000_001).decode("utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError) as exc:
-            raise RuntimeError(
-                f"FileBot cannot reach Ollama at {base_url}. Start Ollama and try again. "
-                f"Details: {exc}"
-            ) from exc
-        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
-            raise RuntimeError(f"Ollama at {base_url} returned an invalid model list.")
+            payload = self._ollama_tags(base_url)
+        except (OSError, ValueError, UnicodeDecodeError) as first_error:
+            if not ollama.get("auto_start", False):
+                raise RuntimeError(
+                    f"FileBot cannot reach Ollama at {base_url}. Start Ollama and try again. "
+                    f"Details: {first_error}"
+                ) from first_error
+            self._start_ollama()
+            timeout = min(120, max(1, int(ollama.get("startup_timeout_seconds", 30))))
+            deadline = time.monotonic() + timeout
+            last_error: Exception = first_error
+            while time.monotonic() < deadline:
+                if self._ollama_process is not None and self._ollama_process.poll() is not None:
+                    raise RuntimeError(
+                        "Ollama exited while FileBot was waiting for its local server. "
+                        "Open Ollama from the Start menu and try again."
+                    )
+                try:
+                    payload = self._ollama_tags(base_url)
+                    break
+                except (OSError, ValueError, UnicodeDecodeError) as exc:
+                    last_error = exc
+                    time.sleep(0.25)
+            else:
+                raise RuntimeError(
+                    f"Ollama did not become ready at {base_url} within {timeout} seconds. "
+                    "Open Ollama from the Start menu and try again. "
+                    f"Details: {last_error}"
+                ) from last_error
         installed = {
             str(item.get("name") or item.get("model"))
             for item in payload["models"] if isinstance(item, dict)
@@ -283,6 +305,45 @@ class BotRuntime:
                 f"FileBot's model '{model}' is not installed in Ollama. Run "
                 f"`ollama pull {model}` and try again."
             )
+
+    @staticmethod
+    def _ollama_tags(base_url: str) -> dict[str, Any]:
+        """Fetch a bounded model list from the local Ollama HTTP endpoint."""
+        from urllib.request import urlopen
+
+        with urlopen(f"{base_url}/api/tags", timeout=4) as response:
+            payload = json.loads(response.read(1_000_001).decode("utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise RuntimeError("Ollama returned an invalid model list.")
+        return payload
+
+    def _start_ollama(self) -> None:
+        """Start Ollama's lightweight local server without opening a console."""
+        if self._ollama_process is not None and self._ollama_process.poll() is None:
+            return
+        executable = shutil.which("ollama")
+        if executable is None:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                installed = Path(local_app_data) / "Programs" / "Ollama" / "ollama.exe"
+                if installed.is_file():
+                    executable = str(installed)
+        if executable is None:
+            raise RuntimeError(
+                "Ollama is not on PATH and its standard Windows install was not found. "
+                "Install Ollama or set models.ollama.auto_start to false."
+            )
+        try:
+            self._ollama_process = subprocess.Popen(
+                [executable, "serve"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"Could not start local Ollama server: {exc}") from exc
 
     def _run_agent(self, intent: str, coroutine: Any) -> Any:
         """Run one serialized turn with only tools appropriate for its intent."""
@@ -315,8 +376,48 @@ class BotRuntime:
             return "The local model returned an empty answer. Please try again."
         return content
 
-    def ask(self, prompt: str) -> str:
-        """Handle one user prompt, routing search and CMD intent before Nanobot."""
+    def _open_explicit_target(self, prompt: str) -> str | list[dict[str, Any]] | None:
+        """Open an exact indexed filename without loading or calling the LLM."""
+        target = self.router.open_target(prompt)
+        if target is None:
+            return None
+        candidate = Path(target).expanduser()
+        if candidate.is_absolute():
+            row = self.db.get_file(candidate)
+            matches = [row] if row is not None else []
+        elif "/" in target or "\\" in target:
+            roots = self.settings.get("index", {}).get("roots", [])
+            matches = []
+            seen: set[str] = set()
+            for root in roots:
+                row = self.db.get_file(expand_config_path(root) / candidate)
+                if row is not None and str(row["path"]).casefold() not in seen:
+                    matches.append(row)
+                    seen.add(str(row["path"]).casefold())
+        else:
+            matches = self.db.find_indexed_by_name(target)
+        if not matches:
+            return f"I couldn't find '{Path(target).name}' in FileBot's current index."
+        if len(matches) > 1:
+            return [{
+                "path": str(row["path"]),
+                "snippet": str(row["snippet"] or "Matching indexed file"),
+            } for row in matches[:20]]
+        from agent.tools.file_ops_tool import FileOpsTool
+        roots = self.settings.get("index", {}).get("roots")
+        file_ops = FileOpsTool(self.db, roots=roots)
+        file_ops.open_file(str(matches[0]["path"]))
+        return f"Opened {matches[0]['path']}"
+
+    def ask(self, prompt: str) -> str | list[dict[str, Any]]:
+        """Route explicit local file actions before starting the LLM runtime."""
+        intent = self.router.route(prompt)
+        if intent == "search":
+            return self.search(prompt)
+        if intent == "open":
+            result = self._open_explicit_target(prompt)
+            if result is not None:
+                return result
         intent, prompt = self._prepare_prompt(prompt)
         # A failed HTTP request may still have loaded Ollama's model. Always
         # request idle unload when this awake session is closed.
@@ -326,8 +427,15 @@ class BotRuntime:
         )
         return self._answer_text(result)
 
-    def ask_streaming(self, prompt: str, on_delta: Any) -> str:
-        """Stream answer text to a callback, then return the validated final answer."""
+    def ask_streaming(self, prompt: str, on_delta: Any) -> str | list[dict[str, Any]]:
+        """Stream chat, while answering obvious local searches without Ollama."""
+        intent = self.router.route(prompt)
+        if intent == "search":
+            return self.search(prompt)
+        if intent == "open":
+            result = self._open_explicit_target(prompt)
+            if result is not None:
+                return result
         intent, prompt = self._prepare_prompt(prompt)
         self._model_used = True
 
@@ -350,8 +458,7 @@ class BotRuntime:
         return self._answer_text(self._run_agent(intent, collect()))
 
     def search(self, query: str) -> list[dict[str, Any]]:
-        """Return direct local retrieval matches for the compact search view."""
-        self.indexer.drain(limit=100)
+        """Return indexed matches immediately; queue draining stays in background."""
         return self.engine.search(query, 20)
 
     def close(self) -> None:

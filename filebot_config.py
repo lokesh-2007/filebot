@@ -29,6 +29,16 @@ def load_settings(path: str | Path) -> dict[str, Any]:
         if missing:
             raise RuntimeError(f"FileBot settings section '{section}' is missing: {', '.join(missing)}")
     index = settings["index"]
+    retrieval = settings.get("retrieval", {})
+    if not isinstance(retrieval, dict):
+        raise RuntimeError("FileBot settings section 'retrieval' must be a mapping")
+    glossary = retrieval.get("glossary", {})
+    if not isinstance(glossary, dict) or any(
+        not isinstance(alias, str) or not alias.strip() or len(alias) > 100
+        or not isinstance(expansion, str) or not expansion.strip() or len(expansion) > 500
+        for alias, expansion in glossary.items()
+    ):
+        raise RuntimeError("FileBot setting 'retrieval.glossary' must map short aliases to non-empty expansions")
     if not isinstance(index["roots"], list) or any(not isinstance(root, str) or not root.strip()
                                                   for root in index["roots"]):
         raise RuntimeError("FileBot setting 'index.roots' must be a list of non-empty paths")
@@ -45,6 +55,12 @@ def load_settings(path: str | Path) -> dict[str, Any]:
                      "index.max_extracted_chars", minimum=1, integer=True)
     _validate_number(index.get("max_docx_uncompressed_bytes", 100_000_000),
                      "index.max_docx_uncompressed_bytes", minimum=1, integer=True)
+    source_timeout = _validate_number(
+        index.get("source_parse_timeout_ms", 250),
+        "index.source_parse_timeout_ms", minimum=1, integer=True,
+    )
+    if source_timeout > 5_000:
+        raise RuntimeError("FileBot setting 'index.source_parse_timeout_ms' must be at most 5000")
     chunk_chars = _validate_number(index.get("chunk_chars", 1200), "index.chunk_chars", minimum=100, integer=True)
     overlap = _validate_number(index.get("chunk_overlap", 150), "index.chunk_overlap", minimum=0, integer=True)
     if overlap >= chunk_chars:
@@ -70,6 +86,15 @@ def load_settings(path: str | Path) -> dict[str, Any]:
             raise RuntimeError(f"FileBot settings section 'models.{section}' is missing: {', '.join(missing)}")
     embeddings = models["embeddings"]
     _validate_number(embeddings.get("batch_size", 64), "models.embeddings.batch_size", minimum=1, integer=True)
+    ollama = models["ollama"]
+    if "auto_start" in ollama and type(ollama["auto_start"]) is not bool:
+        raise RuntimeError("FileBot setting 'models.ollama.auto_start' must be true or false")
+    _validate_number(
+        ollama.get("startup_timeout_seconds", 30),
+        "models.ollama.startup_timeout_seconds",
+        minimum=1,
+        integer=True,
+    )
     return settings
 
 

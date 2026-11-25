@@ -295,47 +295,57 @@ impl FileBotTools {
     }
 
     fn open_indexed_file(&self, raw_path: &str) -> Result<String, AgentError> {
-        if raw_path.chars().count() > 4096 {
-            return Err(AgentError::FileOperation("path exceeds the limit".into()));
-        }
-        let path = PathBuf::from(raw_path)
-            .canonicalize()
+        open_indexed_path(&self.database, &self.roots, raw_path)
+    }
+}
+
+/// Open a selected search result after rechecking index membership and configured roots.
+///
+/// The desktop shell calls this directly so opening a file does not wake Ollama.
+pub fn open_indexed_path(
+    database: &Database,
+    roots: &[PathBuf],
+    raw_path: &str,
+) -> Result<String, AgentError> {
+    if raw_path.chars().count() > 4096 {
+        return Err(AgentError::FileOperation("path exceeds the limit".into()));
+    }
+    let path = PathBuf::from(raw_path)
+        .canonicalize()
+        .map_err(|error| AgentError::FileOperation(error.to_string()))?;
+    if !path.is_file() {
+        return Err(AgentError::FileOperation(
+            "only existing files can be opened".into(),
+        ));
+    }
+    let roots = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .collect::<Vec<_>>();
+    if !roots.iter().any(|root| path.starts_with(root)) {
+        return Err(AgentError::FileOperation(
+            "file is outside FileBot's configured roots".into(),
+        ));
+    }
+    if !database.is_indexed_file(&path)? {
+        return Err(AgentError::FileOperation(
+            "file is not in FileBot's local index".into(),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        Command::new("explorer.exe")
+            .arg(&path)
+            .spawn()
             .map_err(|error| AgentError::FileOperation(error.to_string()))?;
-        if !path.is_file() {
-            return Err(AgentError::FileOperation(
-                "only existing files can be opened".into(),
-            ));
-        }
-        let roots = self
-            .roots
-            .iter()
-            .filter_map(|root| root.canonicalize().ok())
-            .collect::<Vec<_>>();
-        if !roots.iter().any(|root| path.starts_with(root)) {
-            return Err(AgentError::FileOperation(
-                "file is outside FileBot's configured roots".into(),
-            ));
-        }
-        if !self.database.is_indexed_file(&path)? {
-            return Err(AgentError::FileOperation(
-                "file is not in FileBot's local index".into(),
-            ));
-        }
-        #[cfg(windows)]
-        {
-            Command::new("explorer.exe")
-                .arg(&path)
-                .spawn()
-                .map_err(|error| AgentError::FileOperation(error.to_string()))?;
-            Ok(format!("Opened {}", path.display()))
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = path;
-            Err(AgentError::FileOperation(
-                "opening indexed files is supported only on Windows".into(),
-            ))
-        }
+        Ok(format!("Opened {}", path.display()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(AgentError::FileOperation(
+            "opening indexed files is supported only on Windows".into(),
+        ))
     }
 }
 

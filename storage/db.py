@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import hashlib
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -69,6 +70,10 @@ CREATE TABLE IF NOT EXISTS file_signals (
 CREATE TABLE IF NOT EXISTS glossary (
     alias TEXT PRIMARY KEY COLLATE NOCASE,
     expansion TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cmd_audit (
@@ -233,6 +238,140 @@ class Database:
         with self.connect() as connection:
             return connection.execute("SELECT * FROM files WHERE path=?", (str(Path(path).resolve()),)).fetchone()
 
+    def find_indexed_by_name(self, name: str) -> list[sqlite3.Row]:
+        """Find indexed files by exact basename, returning their best snippet."""
+        file_name = Path(name).name
+        with self.connect() as connection:
+            return list(connection.execute(
+                """SELECT f.path,f.file_name,c.snippet,c.page_or_line,c.heading
+                   FROM files f LEFT JOIN chunks c ON c.file_id=f.file_id AND c.chunk_index=0
+                   WHERE f.status='indexed' AND f.file_name=? COLLATE NOCASE
+                   ORDER BY f.path COLLATE NOCASE""",
+                (file_name,),
+            ))
+
+    def record_file_open(self, path: str | Path) -> None:
+        """Increment the indexed file's open signal after a successful open."""
+        normalized = str(Path(path).expanduser().resolve())
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO file_signals(file_id,open_count,last_opened)
+                   SELECT file_id,1,strftime('%s','now') FROM files WHERE path=?
+                   ON CONFLICT(file_id) DO UPDATE SET
+                     open_count=open_count+1,last_opened=excluded.last_opened""",
+                (normalized,),
+            )
+
+    def record_file_feedback(self, path: str | Path, vote: str) -> bool:
+        """Record a positive or negative retrieval signal for an indexed file."""
+        if vote not in {"up", "down"}:
+            raise ValueError("vote must be 'up' or 'down'")
+        normalized = str(Path(path).expanduser().resolve())
+        column = "upvotes" if vote == "up" else "downvotes"
+        with self.connect() as connection:
+            row = connection.execute("SELECT file_id FROM files WHERE path=?", (normalized,)).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                f"""INSERT INTO file_signals(file_id,{column}) VALUES(?,1)
+                    ON CONFLICT(file_id) DO UPDATE SET {column}={column}+1""",
+                (int(row["file_id"]),),
+            )
+        return True
+
+    def set_glossary_entries(self, entries: dict[str, str]) -> None:
+        """Persist validated shorthand expansions without removing user entries."""
+        normalized: list[tuple[str, str]] = []
+        for alias, expansion in entries.items():
+            if not isinstance(alias, str) or not alias.strip() or len(alias) > 100:
+                raise ValueError("glossary aliases must be non-empty strings of at most 100 characters")
+            if not isinstance(expansion, str) or not expansion.strip() or len(expansion) > 500:
+                raise ValueError("glossary expansions must be non-empty strings of at most 500 characters")
+            normalized.append((alias.strip(), expansion.strip()))
+        with self.connect() as connection:
+            connection.executemany(
+                """INSERT INTO glossary(alias,expansion) VALUES(?,?)
+                   ON CONFLICT(alias) DO UPDATE SET expansion=excluded.expansion""",
+                normalized,
+            )
+
+    def glossary_entries(self) -> list[tuple[str, str]]:
+        """Return configured aliases in stable case-insensitive order."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT alias, expansion FROM glossary ORDER BY alias COLLATE NOCASE"
+            )
+            return [(str(row[0]), str(row[1])) for row in rows]
+
+    def replace_glossary_entries(self, entries: dict[str, str]) -> None:
+        """Atomically replace the glossary after validating every mapping."""
+        normalized: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for alias, expansion in entries.items():
+            if not isinstance(alias, str) or not alias.strip() or len(alias) > 100:
+                raise ValueError("glossary aliases must be non-empty strings of at most 100 characters")
+            if not isinstance(expansion, str) or not expansion.strip() or len(expansion) > 500:
+                raise ValueError("glossary expansions must be non-empty strings of at most 500 characters")
+            key = alias.strip().casefold()
+            if key in seen:
+                raise ValueError("glossary aliases must be unique, ignoring case")
+            seen.add(key)
+            normalized.append((alias.strip(), expansion.strip()))
+        try:
+            with self.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("DELETE FROM glossary")
+                connection.executemany(
+                    "INSERT INTO glossary(alias, expansion) VALUES(?, ?)", normalized,
+                )
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not save glossary entries: {exc}") from exc
+
+    def seed_glossary_entries(self, entries: dict[str, str]) -> None:
+        """Seed YAML glossary defaults once; later UI edits remain authoritative."""
+        normalized: list[tuple[str, str]] = []
+        for alias, expansion in entries.items():
+            if not isinstance(alias, str) or not alias.strip() or len(alias) > 100:
+                raise ValueError("glossary aliases must be non-empty strings of at most 100 characters")
+            if not isinstance(expansion, str) or not expansion.strip() or len(expansion) > 500:
+                raise ValueError("glossary expansions must be non-empty strings of at most 500 characters")
+            normalized.append((alias.strip(), expansion.strip()))
+        try:
+            with self.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                seeded = connection.execute(
+                    "SELECT value FROM app_state WHERE key='glossary_seeded'"
+                ).fetchone()
+                if seeded is not None:
+                    return
+                connection.executemany(
+                    "INSERT INTO glossary(alias, expansion) VALUES(?, ?) "
+                    "ON CONFLICT(alias) DO NOTHING", normalized,
+                )
+                connection.execute(
+                    "INSERT INTO app_state(key, value) VALUES('glossary_seeded', '1')"
+                )
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not seed glossary entries: {exc}") from exc
+
+    def expand_glossary(self, query: str) -> str:
+        """Expand configured aliases at word boundaries in a search query."""
+        with self.connect() as connection:
+            entries = list(connection.execute(
+                "SELECT alias,expansion FROM glossary ORDER BY length(alias) DESC,alias COLLATE NOCASE"
+            ))
+        expanded = query
+        for row in entries:
+            alias = str(row["alias"]).strip()
+            if alias:
+                expanded = re.sub(
+                    rf"(?<!\w){re.escape(alias)}(?!\w)",
+                    lambda _match, value=str(row["expansion"]): value,
+                    expanded,
+                    flags=re.IGNORECASE,
+                )
+        return expanded
+
     def paths_under(self, directory: str | Path) -> list[str]:
         """List indexed and queued file paths beneath a directory."""
         root = str(Path(directory).expanduser().resolve()).rstrip("\\/") + os.sep
@@ -285,8 +424,11 @@ class Database:
     def all_chunks(self) -> list[sqlite3.Row]:
         """Return chunk corpus records for the in-memory BM25 index."""
         with self.connect() as connection:
-            return list(connection.execute("""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading
-                FROM chunks c JOIN files f USING(file_id) WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""))
+            return list(connection.execute("""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
+                COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
+                COALESCE(s.downvotes,0) AS downvotes
+                FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
+                WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""))
 
     def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
         """Fallback lexical search using SQLite LIKE when BM25 is not active."""
@@ -295,8 +437,11 @@ class Database:
             return []
         clause = " OR ".join("c.snippet LIKE ?" for _ in terms)
         with self.connect() as connection:
-            return list(connection.execute(f"""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading
-                FROM chunks c JOIN files f USING(file_id) WHERE {clause} LIMIT ?""", (*terms, limit)))
+            return list(connection.execute(f"""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
+                COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
+                COALESCE(s.downvotes,0) AS downvotes
+                FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
+                WHERE {clause} LIMIT ?""", (*terms, limit)))
 
     def stage_command(self, command: str, cwd: str, reason: str, risk: str, status: str = "pending") -> str:
         """Create an immutable audit proposal and return its identifier."""

@@ -11,11 +11,11 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 ## Architecture map
 
 - `app.pyw` — Windows entry point; configures logging, enforces one running instance, and starts UI, watcher, lifecycle, and hotkey components.
-- `daemon/lifecycle_manager.py` — wakes and sleeps the assistant, loads/unloads heavy resources, and tracks work so idle shutdown does not interrupt requests.
+- `daemon/lifecycle_manager.py`, `daemon/metrics.py` — wake/sleep supervision and privacy-safe startup, response latency, and Windows working-set diagnostics.
 - `daemon/watcher.py` — watches configured roots and debounces file events into SQLite without loading retrieval models.
 - `ui/avatar_bubble.py`, `ui/popover_card.py`, `ui/hotkey_bridge.py` — avatar, search/chat/approval popover, and global hotkey bridge.
 - `storage/db.py` — SQLite WAL storage for indexed files/chunks, dirty work, file signals/glossary, and command audit state.
-- `retrieval/parsers.py` — bounded TXT/Markdown, PDF, and DOCX parsing.
+- `retrieval/parsers.py` — bounded TXT/Markdown, PDF, DOCX, and offline-checked Tree-sitter source parsing.
 - `retrieval/index_worker.py` — drains durable file changes, hashes and parses files, retries failures, and refreshes the index.
 - `retrieval/hybrid_engine.py` — lazy FastEmbed/ONNX embeddings, ChromaDB, BM25, and reciprocal-rank fusion.
 - `agent/bot_runtime.py` — lazy Nanobot/Ollama runtime, fast intent routing, and the narrow FileBot tool registry.
@@ -26,6 +26,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `scripts/setup.ps1`, `scripts/start.ps1` — environment setup and desktop-session launch.
 - `tests/` — unit, Qt lifecycle, retrieval, watcher, startup, and Ollama tool-bridge checks.
 - `rust/` — in-progress native migration; see `rust/README.md`. Do not treat the core crate as a desktop replacement until its parity gates pass.
+- `ROADMAP.md` — acceptance status against the attached FileBot architecture and research plan.
 - Rust core modules: `rust/src/config.rs`, `rust/src/storage/`, `rust/src/daemon/watcher.rs`, `rust/src/executor/`, and `rust/src/agent/`.
 
 ## Safety and privacy invariants
@@ -53,5 +54,5 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 
 - The repository currently provides a source-based Windows setup and launcher, not a signed installer.
 - First-use downloads require network access: Python dependencies, the configured Ollama model (`ollama pull qwen2.5-coder:3b` by default), and the FastEmbed model.
-- Supported indexed formats are TXT, Markdown, PDF, and DOCX. Source-code-aware parsing is not implemented.
+- Supported indexed formats include bounded TXT/Markdown, PDF/DOCX, and syntax-aware source chunks for cached Tree-sitter grammars. Setup attempts to cache grammars; if GitHub is unavailable it warns and bounded plain-text chunking remains available. Indexing never downloads them.
 - Check the current changelog before assuming a limitation is still present; this project is actively being hardened.

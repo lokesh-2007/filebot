@@ -1,6 +1,6 @@
 [package]
 name = "filebot"
-version = "0.9.0"
+version = "0.10.2"
 edition = "2024"
 rust-version = "1.92"
 description = "Low-memory local file search and gated CMD assistant for Windows"
