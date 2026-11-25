@@ -25,6 +25,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `config/cmd_policy.yaml` — blocked/read-only/gated command patterns. Treat policy edits as security-sensitive.
 - `scripts/setup.ps1`, `scripts/start.ps1` — environment setup and desktop-session launch.
 - `tests/` — unit, Qt lifecycle, retrieval, watcher, startup, and Ollama tool-bridge checks.
+- `rust/` — in-progress native migration; see `rust/README.md`. Do not treat the core crate as a desktop replacement until its parity gates pass.
 
 ## Safety and privacy invariants
 

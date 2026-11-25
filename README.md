@@ -5,6 +5,14 @@ FileBot is a local Windows file search assistant with a small always-on avatar a
 See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
 See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.
 
+## Rust migration status
+
+The native Rust migration has started in [`rust/`](rust/). Its current crate
+implements typed settings, SQLite persistence primitives, and the command
+policy, but it is not a desktop application yet. Use the Python 0.6.3 app for
+normal operation until the Rust UI, watcher, search/indexing, agent, and gated
+executor pass the documented parity checks in [`rust/README.md`](rust/README.md).
+
 ## Requirements
 
 - Windows 10/11 and Python 3.11 or 3.12 (64-bit)

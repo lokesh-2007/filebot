@@ -3,6 +3,15 @@
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
+## Rust migration core 0.1.0 — 2026-11-25
+
+- Add a separately tested Rust core for typed settings, WAL SQLite persistence,
+  durable dirty-queue retries, command audit transitions, and the default-deny
+  CMD policy. The crate is not yet the desktop app; Python 0.6.3 remains the
+  supported Windows executable until Rust reaches feature parity.
+- Add Windows CI formatting, clippy, and Rust unit-test gates. The 15 core tests,
+  formatting check, and warning-free clippy run pass locally.
+
 ## 0.6.3 — 2026-11-25
 
 - Recheck the local Ollama endpoint and configured model before every chat turn,

@@ -1,0 +1,28 @@
+[package]
+name = "filebot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Low-memory local file search and gated CMD assistant for Windows"
+publish = false
+
+[lib]
+name = "filebot_core"
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1.12"
+rusqlite = { version = "0.43", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml_ng = "0.10"
+thiserror = "2.0"
+uuid = { version = "1.18", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.23"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
