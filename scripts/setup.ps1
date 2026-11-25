@@ -55,4 +55,3 @@ if ($null -eq $ollama) {
 }
 
 Write-Host "FileBot setup is ready. Start it with: .\scripts\start.ps1"
-

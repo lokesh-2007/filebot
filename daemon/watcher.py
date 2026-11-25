@@ -12,15 +12,17 @@ from typing import Any
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from filebot_config import expand_config_path
+from filebot_config import expand_config_path, path_is_within_roots
 from storage.db import Database
 
 log = logging.getLogger(__name__)
 
 
 class _DebouncedHandler(FileSystemEventHandler):
-    def __init__(self, db: Database, delay: float, extensions: set[str], excluded: set[str]) -> None:
+    def __init__(self, db: Database, delay: float, extensions: set[str], excluded: set[str],
+                 roots: list[Path]) -> None:
         self.db, self.delay, self.extensions, self.excluded = db, delay, extensions, excluded
+        self.roots = roots
         self._condition = threading.Condition()
         self._pending: dict[str, tuple[str, float]] = {}
         self._directory_jobs: deque[tuple[str, str]] = deque()
@@ -30,6 +32,8 @@ class _DebouncedHandler(FileSystemEventHandler):
 
     def _queue(self, path: str, operation: str) -> None:
         target = Path(path)
+        if not path_is_within_roots(target, self.roots):
+            return
         if target.is_dir() or (operation == "upsert" and target.suffix.lower() not in self.extensions):
             return
         if any(part.lower() in self.excluded for part in target.parts):
@@ -44,6 +48,8 @@ class _DebouncedHandler(FileSystemEventHandler):
     def _queue_directory(self, path: str, operation: str) -> None:
         """Schedule a directory scan or stale-path removal on the queue thread."""
         target = Path(path)
+        if not path_is_within_roots(target, self.roots):
+            return
         if any(part.lower() in self.excluded for part in target.parts):
             return
         with self._condition:
@@ -173,7 +179,7 @@ class FileWatcher:
         self.roots = [expand_config_path(p) for p in config.get("roots", [])]
         self.handler = _DebouncedHandler(db, float(config.get("debounce_seconds", 1)),
             {str(x).lower() for x in config.get("include_extensions", [])},
-            {str(x).lower() for x in config.get("exclude_dirs", [])})
+            {str(x).lower() for x in config.get("exclude_dirs", [])}, self.roots)
         self.observer = Observer()
         self._scan_stop = threading.Event()
         self._scan_thread: threading.Thread | None = None
@@ -231,4 +237,3 @@ class FileWatcher:
             self._scan_thread.join(timeout=5)
         # Stop producers first, then flush the final debounced events.
         self.handler.close()
-

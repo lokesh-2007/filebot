@@ -44,7 +44,12 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "models.embeddings.batch_size.*integer"):
                 load_settings(path)
 
+            settings["models"]["embeddings"]["batch_size"] = 64
+            settings["index"]["max_docx_uncompressed_bytes"] = 0
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "max_docx_uncompressed_bytes.*integer"):
+                load_settings(path)
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -4,16 +4,23 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   production-dependencies:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements.txt
       - name: Install production requirements
@@ -23,6 +30,8 @@ jobs:
       - name: Import lazy runtime dependencies
         run: >-
           python -c "import bm25s, chromadb, docx, fastembed, fitz, nanobot, ollama, PyQt6, watchdog, yaml"
+      - name: Verify the sleeping entry point does not load model libraries
+        run: python -m unittest tests.test_startup -v
       - name: Verify Chroma persistent client shutdown
         run: |
           python -c "import tempfile; from pathlib import Path; import chromadb; d=tempfile.TemporaryDirectory(); client=chromadb.PersistentClient(path=d.name); client.get_or_create_collection('filebot_ci_smoke'); client.close(); d.cleanup(); print('Chroma client closed and temporary database removed')"
@@ -55,4 +64,3 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("scripts/start.ps1", [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors) { throw ($errors | Out-String) }
-

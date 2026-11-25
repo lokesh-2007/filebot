@@ -36,7 +36,21 @@ class AvatarBubble(QWidget):
     def show_popover(self, popover: QWidget) -> None:
         point = self.frameGeometry().topLeft()
         popover.adjustSize()
-        popover.move(max(0, point.x() - popover.width() + self.width()), max(0, point.y() - popover.height() - 8))
+        x = point.x() - popover.width() + self.width()
+        y = point.y() - popover.height() - 8
+        screen = self.screen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            if y < area.top():
+                y = point.y() + self.height() + 8
+            # QRect's right and bottom edges are inclusive. Keep the entire
+            # card inside the active monitor's work area, including negative
+            # coordinate layouts where a secondary display sits left/up.
+            max_x = max(area.left(), area.right() + 1 - popover.width())
+            max_y = max(area.top(), area.bottom() + 1 - popover.height())
+            x = min(max(area.left(), x), max_x)
+            y = min(max(area.top(), y), max_y)
+        popover.move(x, y)
         popover.show()
         popover.raise_()
 
@@ -70,4 +84,3 @@ class AvatarBubble(QWidget):
             else:
                 self.toggled.emit()
             self._offset = None
-

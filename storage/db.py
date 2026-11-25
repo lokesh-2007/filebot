@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS dirty_queue (
     path TEXT PRIMARY KEY,
     event_type TEXT NOT NULL CHECK(event_type IN ('upsert', 'delete')),
     queued_at REAL NOT NULL,
+    available_at REAL NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
     last_error TEXT
 );
@@ -124,12 +125,15 @@ class Database:
             connection.close()
 
     def initialize(self) -> None:
-        """Create the schema and enable persistent write-ahead logging."""
+        """Create or migrate the schema and enable persistent write-ahead logging."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self.connect() as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(_SCHEMA)
+                columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(dirty_queue)")}
+                if "available_at" not in columns:
+                    connection.execute("ALTER TABLE dirty_queue ADD COLUMN available_at REAL NOT NULL DEFAULT 0")
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not initialize FileBot database at {self.path}: {exc}") from exc
 
@@ -150,12 +154,12 @@ class Database:
         try:
             with self.connect() as connection:
                 connection.executemany(
-                    """INSERT INTO dirty_queue(path, event_type, queued_at, attempts, last_error)
-                       VALUES (?, ?, ?, 0, NULL)
+                    """INSERT INTO dirty_queue(path, event_type, queued_at, available_at, attempts, last_error)
+                       VALUES (?, ?, ?, ?, 0, NULL)
                        ON CONFLICT(path) DO UPDATE SET event_type=excluded.event_type,
                            queued_at=MAX(excluded.queued_at, dirty_queue.queued_at + 0.000001),
-                           attempts=0, last_error=NULL""",
-                    normalized,
+                           available_at=excluded.available_at, attempts=0, last_error=NULL""",
+                    [(path, operation, queued_at, queued_at) for path, operation, queued_at in normalized],
                 )
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not queue filesystem event batch: {exc}") from exc
@@ -168,10 +172,23 @@ class Database:
             with self.connect() as connection:
                 return list(connection.execute(
                     "SELECT path, event_type AS operation, queued_at, attempts, last_error "
-                    "FROM dirty_queue ORDER BY queued_at LIMIT ?", (limit,)
+                    "FROM dirty_queue WHERE available_at <= ? ORDER BY queued_at LIMIT ?",
+                    (datetime.now(timezone.utc).timestamp(), limit),
                 ))
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not read dirty queue: {exc}") from exc
+
+    def dirty_record(self, path: str | Path) -> sqlite3.Row | None:
+        """Return queue state, including deferred retry details, for diagnostics."""
+        normalized = str(Path(path).expanduser().resolve())
+        try:
+            with self.connect() as connection:
+                return connection.execute(
+                    "SELECT path, event_type AS operation, queued_at, available_at, attempts, last_error "
+                    "FROM dirty_queue WHERE path=?", (normalized,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not read queued path {normalized}: {exc}") from exc
 
     def remove_dirty(self, path: str | Path, queued_at: float | None = None) -> None:
         """Acknowledge an event, optionally only if it is still the same revision."""
@@ -187,21 +204,27 @@ class Database:
             raise RuntimeError(f"Could not remove queued path {normalized}: {exc}") from exc
 
     def record_dirty_error(self, path: str | Path, error: str, queued_at: float | None = None) -> None:
-        """Record a processing failure without changing a newer queued revision."""
+        """Record a failure and defer retry, without changing a newer revision.
+
+        Delays grow from five seconds to at most one hour. A subsequent file
+        event resets ``available_at`` so fresh content is indexed promptly.
+        """
         normalized = str(Path(path).expanduser().resolve())
         try:
             with self.connect() as connection:
-                if queued_at is None:
-                    connection.execute(
-                        "UPDATE dirty_queue SET attempts = attempts + 1, last_error = ? WHERE path = ?",
-                        (error[:2000], normalized),
-                    )
-                else:
-                    connection.execute(
-                        "UPDATE dirty_queue SET attempts = attempts + 1, last_error = ? "
-                        "WHERE path = ? AND queued_at = ?",
-                        (error[:2000], normalized, queued_at),
-                    )
+                connection.execute("BEGIN IMMEDIATE")
+                revision = connection.execute(
+                    "SELECT queued_at, attempts FROM dirty_queue WHERE path=?", (normalized,),
+                ).fetchone()
+                if revision is None or (queued_at is not None and float(revision["queued_at"]) != queued_at):
+                    return
+                delay = min(3600.0, 5.0 * (2 ** min(int(revision["attempts"]), 10)))
+                connection.execute(
+                    "UPDATE dirty_queue SET attempts=attempts+1, last_error=?, available_at=? "
+                    "WHERE path=? AND queued_at=?",
+                    (error[:2000], datetime.now(timezone.utc).timestamp() + delay,
+                     normalized, float(revision["queued_at"])),
+                )
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not record queue error for {normalized}: {exc}") from exc
 
@@ -300,6 +323,29 @@ class Database:
         with self.connect() as connection:
             return connection.execute("SELECT * FROM cmd_audit WHERE proposal_id=?", (proposal_id,)).fetchone()
 
+    def recover_command_states(self) -> tuple[int, int]:
+        """Repair approval rows left behind by a previous process crash.
+
+        Approved commands not yet claimed return to pending and require a fresh
+        click. Claimed commands are marked failed with an uncertain outcome and
+        are never replayed automatically.
+        """
+        try:
+            with self.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                unclaimed = connection.execute(
+                    "UPDATE cmd_audit SET status='pending', approved_at=NULL "
+                    "WHERE status='approved' AND executed_at IS NULL",
+                ).rowcount
+                interrupted = connection.execute(
+                    "UPDATE cmd_audit SET status='failed', exit_code=125, "
+                    "error='FileBot stopped during command execution; outcome may be partial' "
+                    "WHERE status='approved' AND executed_at IS NOT NULL",
+                ).rowcount
+                return unclaimed, interrupted
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"Could not recover command audit state: {exc}") from exc
+
     def claim_approved_command(self, proposal_id: str) -> sqlite3.Row | None:
         """Atomically claim an approved command so a rapid second click cannot run it twice."""
         with self.connect() as connection:
@@ -318,4 +364,3 @@ class Database:
             connection.execute("""UPDATE cmd_audit SET status=?,exit_code=?,stdout_tail=?,stderr_tail=?,executed_at=strftime('%s','now')
                 WHERE proposal_id=? AND status='approved' AND executed_at IS NOT NULL""",
                 ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))
-

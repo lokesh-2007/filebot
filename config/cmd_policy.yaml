@@ -26,4 +26,3 @@ blocked:
   - '[%!]'
   - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip)\b'
   - '^\s*(?:del|erase|rmdir|rd)\s+.*(?:/s|/q|/f)'
-

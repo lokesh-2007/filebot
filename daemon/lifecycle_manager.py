@@ -200,4 +200,3 @@ class LifecycleManager(QObject):
             self._wake_worker = None
         self._busy = False
         self._finish_sleep()
-

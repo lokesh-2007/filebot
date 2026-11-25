@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 from retrieval.hybrid_engine import HybridEngine
+from retrieval.parsers import parse_file
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReciprocalRankFusionTests(unittest.TestCase):
@@ -27,7 +32,70 @@ class ReciprocalRankFusionTests(unittest.TestCase):
         self.assertEqual(result[0]["heading"], "Summary")
 
 
+class ParserResourceLimitTests(unittest.TestCase):
+    def test_text_parser_caps_extracted_characters(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "large.txt"
+            path.write_text("x" * 1000, encoding="utf-8")
+
+            chunks = parse_file(path, chunk_chars=100, overlap=0, max_chars=250)
+
+            self.assertLessEqual(sum(len(chunk.text) for chunk in chunks), 250)
+
+    def test_docx_parser_rejects_archive_expansion_over_limit(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "large.docx"
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("word/document.xml", "x" * 1000)
+
+            with self.assertRaisesRegex(ValueError, "DOCX expands"):
+                parse_file(path, max_docx_uncompressed_bytes=100)
+
+
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_lexical_refresh_hides_stale_rows_outside_current_roots(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            base = Path(directory)
+            allowed = base / "allowed"
+            outside = base / "outside"
+            allowed.mkdir()
+            outside.mkdir()
+
+            def row(path: Path, chunk_id: str) -> dict[str, object]:
+                return {"chunk_id": chunk_id, "path": str(path), "file_name": path.name,
+                        "snippet": "matching content", "page_or_line": None, "heading": None}
+
+            class FakeDatabase:
+                def all_chunks(self):
+                    return [row(allowed / "in.txt", "inside"), row(outside / "old.txt", "outside")]
+
+            engine = HybridEngine({"index": {"roots": [str(allowed)]}}, FakeDatabase())
+            engine._refresh_bm25()
+
+            self.assertEqual([item["chunk_id"] for item in engine._rows], ["inside"])
+
+    def test_short_identifier_search_returns_exact_hits_only(self) -> None:
+        engine = HybridEngine({}, db=None)
+        engine._rows = [
+            {"file_name": "guide.md", "path": "guide.md", "snippet": "Use an h1 heading here.",
+             "page_or_line": None, "heading": None},
+            {"file_name": "readme.md", "path": "readme.md", "snippet": "This file describes HTML styles.",
+             "page_or_line": None, "heading": None},
+        ]
+
+        results = engine.search("h1")
+
+        self.assertEqual([row["path"] for row in results], ["guide.md"])
+
+    def test_short_identifier_search_does_not_match_inside_words(self) -> None:
+        engine = HybridEngine({}, db=None)
+        engine._rows = [
+            {"file_name": "guide.md", "path": "guide.md", "snippet": "The word h10 is here.",
+             "page_or_line": None, "heading": None},
+        ]
+
+        self.assertEqual(engine.search("h1"), [])
+
     def test_close_releases_chroma_client_and_all_heavy_references(self) -> None:
         class Client:
             closed = False

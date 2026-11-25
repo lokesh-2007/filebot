@@ -28,4 +28,3 @@ class InstanceGuard:
         if self._acquired:
             self._lock.unlock()
             self._acquired = False
-

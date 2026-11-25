@@ -1,6 +1,9 @@
-# FileBot
+# FileBot 0.6.0
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
+
+See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
+See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.
 
 ## Requirements
 
@@ -34,13 +37,15 @@ For startup diagnostics, run `.\scripts\start.ps1 -Console`. FileBot also writes
 
 ## Search and indexing
 
-Watchdog records debounced file changes in SQLite using one bounded-memory debounce thread. It does not load an embedding model. Wake-up loads retrieval resources on a background thread and starts an indexing service that processes queued updates in bounded batches while awake. Search and indexing share a lock so vector and lexical state cannot be changed during a query. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
+Watchdog records debounced file changes in SQLite using one bounded-memory debounce thread. It does not load an embedding model. Wake-up loads retrieval resources on a background thread and starts an indexing service that processes queued updates in bounded batches while awake. Failed files remain queued with exponential retry backoff (five seconds up to one hour); a new change makes them eligible immediately, so one corrupt document cannot starve later files. Search and indexing share a lock so vector and lexical state cannot be changed during a query. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
 
-The indexer intentionally handles only extensions listed in settings. Embeddings are written in bounded batches controlled by `models.embeddings.batch_size` (64 by default), and stale vectors are removed only after the replacement chunk records are committed in SQLite. Changing the roots or extensions does not automatically remove old database records; remove the database under `~/.filebot` if you want to rebuild from scratch.
+The indexer intentionally handles only extensions listed in settings. Watch events, queued updates, retrieval results, and file opening are constrained to the configured roots; symlinks that resolve outside those roots are ignored. File size is capped at 50 MB by default, extracted text at five million characters, and DOCX expanded archive contents at 100 MB to bound parser and chunk memory. These limits are configurable under `index` in settings. File hashes are calculated in 1 MB blocks. Embeddings are written in bounded batches controlled by `models.embeddings.batch_size` (64 by default), and stale vectors are removed only after the replacement chunk records are committed in SQLite. Changing the roots or extensions does not automatically remove old database records; records outside the current roots are hidden from search and cannot be opened. Remove the database under `~/.filebot` if you want to rebuild from scratch.
 
 ## CMD approval
 
 `config/cmd_policy.yaml` is default-deny. Explicitly blocked patterns take priority. `read_only` and `gated` proposals are written to `cmd_audit` and shown in the popover; the user must click **Approve** before either can run. **Reject** records the decision without running it. The current policy is checked again immediately before execution, and a changed or unreadable policy blocks the command. Every execution records its exit code and bounded output tails. Nanobot's general shell and filesystem tools are disabled; its registered tools are FileBot search, file open, and command proposal only.
+
+After an unclean shutdown, approved commands that had not started return to pending and require another approval click. Commands already claimed by the runner are marked interrupted with an uncertain outcome; FileBot never automatically reruns them.
 
 Treat policy edits as security-sensitive. Keep installer, privilege, shell chaining, redirection, and broad recursive deletion commands blocked.
 
@@ -59,4 +64,3 @@ The file index, audit log, vectors, and Nanobot workspace stay on this machine. 
 ## Current scope
 
 The current release supports the sleep/wake shell, local indexing and hybrid retrieval, compact UI, and gated command flow. Supported document formats are text, Markdown, PDF, and DOCX. Source-code-aware parsing and an installer package are not included yet.
-

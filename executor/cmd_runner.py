@@ -105,4 +105,3 @@ class CommandRunner:
             stdout, stderr, code = "", str(exc), 127
         self.db.finish_command(proposal_id, code, stdout, stderr)
         return code, stdout[-4000:], stderr[-4000:]
-

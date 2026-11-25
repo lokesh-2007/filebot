@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 from executor.cmd_runner import CommandRunner
+from agent.tools.file_ops_tool import FileOpsTool
 from storage.db import Database
 
 log = logging.getLogger(__name__)
@@ -18,12 +18,17 @@ log = logging.getLogger(__name__)
 
 class _Task(QThread):
     done = pyqtSignal(object, str)
+    delta = pyqtSignal(str)
     def __init__(self, target: Any, prompt: str, search: bool) -> None:
         super().__init__()
         self.target, self.prompt, self.search = target, prompt, search
     def run(self) -> None:
         try:
-            result = self.target.search(self.prompt) if self.search else self.target.ask(self.prompt)
+            if self.search:
+                result = self.target.search(self.prompt)
+            else:
+                stream = getattr(self.target, "ask_streaming", None)
+                result = stream(self.prompt, self.delta.emit) if callable(stream) else self.target.ask(self.prompt)
             self.done.emit(result, "")
         except Exception as exc:
             log.exception("FileBot request failed")
@@ -56,6 +61,9 @@ class PopoverCard(QWidget):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.engine, self.runtime, self.db = engine, runtime, db
         self.runner = CommandRunner(db)
+        runtime_settings = getattr(runtime, "settings", {})
+        roots = runtime_settings.get("index", {}).get("roots") if isinstance(runtime_settings, dict) else None
+        self.file_ops = FileOpsTool(db, roots=roots)
         self.setWindowTitle("FileBot")
         self.setFixedWidth(390)
         self.setStyleSheet("QWidget{background:#171923;color:#f5f5f5;font:10pt 'Segoe UI'} QLineEdit,QTextEdit,QListWidget{background:#242736;border:1px solid #40445a;border-radius:7px;padding:7px} QPushButton{background:#5141a4;border:0;border-radius:6px;padding:6px 10px} QFrame{border:1px solid #45495e;border-radius:7px}")
@@ -66,6 +74,7 @@ class PopoverCard(QWidget):
         self.input = QLineEdit()
         self.input.setPlaceholderText("Search files or ask a question…")
         self.input.returnPressed.connect(self.submit)
+        self.input.textEdited.connect(lambda _text: self.activity.emit())
         layout.addWidget(self.input)
         row = QHBoxLayout()
         self.search_button = QPushButton("Search")
@@ -88,6 +97,11 @@ class PopoverCard(QWidget):
         self._task: _Task | None = None
         self._command_task: _CommandTask | None = None
         self._command_queue: list[str] = []
+        self._request_elapsed_seconds = 0
+        self._chat_has_deltas = False
+        self._request_timer = QTimer(self)
+        self._request_timer.setInterval(10_000)
+        self._request_timer.timeout.connect(self._show_wait_feedback)
         self._refresh_pending()
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
@@ -103,12 +117,44 @@ class PopoverCard(QWidget):
         self.search_button.setEnabled(False)
         self.ask_button.setEnabled(False)
         self.status_changed.emit("active")
+        self.answer.setPlainText(
+            "Searching indexed files…" if force_search
+            else "Waiting for the local model… The first response can take up to a minute while it loads."
+        )
         self.work_started.emit()
         self._task = _Task(self.runtime, prompt, force_search)
         self._task.done.connect(self._received)
+        self._task.delta.connect(self._received_delta)
+        self._chat_has_deltas = False
+        if not force_search:
+            self._request_elapsed_seconds = 0
+            self._request_timer.start()
         self._task.start()
 
+    def _received_delta(self, delta: str) -> None:
+        """Append a streamed model token on the UI thread."""
+        if not delta:
+            return
+        if not self._chat_has_deltas:
+            self._chat_has_deltas = True
+            self._request_timer.stop()
+            self.answer.clear()
+        cursor = self.answer.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(delta)
+        self.answer.setTextCursor(cursor)
+        self.answer.ensureCursorVisible()
+
+    def _show_wait_feedback(self) -> None:
+        """Show elapsed time while waiting for the first streamed model token."""
+        self._request_elapsed_seconds += self._request_timer.interval() // 1000
+        self.answer.setPlainText(
+            f"Still waiting for the local model ({self._request_elapsed_seconds} seconds)… "
+            "FileBot is working; the first answer can be slow while Ollama loads the model."
+        )
+
     def _received(self, result: object, error: str) -> None:
+        self._request_timer.stop()
         self.input.setEnabled(True)
         self.search_button.setEnabled(True)
         self.ask_button.setEnabled(True)
@@ -121,19 +167,32 @@ class PopoverCard(QWidget):
             for match in result:
                 path = str(match.get("path", ""))
                 text = str(match.get("snippet", "")).replace("\n", " ")[:180]
-                item = QListWidgetItem(f"{Path(path).name}  ·  {text}")
+                item = QListWidgetItem(f"{path}\n{text}")
+                item.setSizeHint(QSize(0, 54))
+                item.setToolTip(f"{path}\n\n{text}")
                 item.setData(Qt.ItemDataRole.UserRole, path)
                 self.results.addItem(item)
-            self.answer.clear()
+            if not result:
+                self.answer.setPlainText("No matching files found in the current index.")
+            else:
+                self.answer.setPlainText(
+                    f"Found {len(result)} files. Select a result to open it, or click Ask "
+                    "for a local model answer."
+                )
         else:
             self.answer.setPlainText(str(result))
         self._refresh_pending()
         self.work_finished.emit()
 
     def open_result(self, item: QListWidgetItem) -> None:
+        self.activity.emit()
         path = item.data(Qt.ItemDataRole.UserRole)
-        if path and Path(path).is_file():
-            os.startfile(path)  # type: ignore[attr-defined]
+        if path:
+            try:
+                self.file_ops.open_file(path)
+            except (OSError, ValueError) as exc:
+                log.exception("Could not open indexed file %s", path)
+                self.answer.setPlainText(f"Could not open {path}: {exc}")
 
     def _refresh_pending(self) -> None:
         while self.pending.count():
@@ -143,7 +202,15 @@ class PopoverCard(QWidget):
         for row in rows:
             card = QFrame()
             box = QVBoxLayout(card)
-            box.addWidget(QLabel(f"Pending CMD · {row['risk_level']}\n{row['command']}"))
+            details = QLabel(
+                f"Pending CMD · {row['risk_level']}\n"
+                f"Command: {row['command']}\n"
+                f"Reason: {row['reason']}\n"
+                f"Working directory: {row['cwd']}"
+            )
+            details.setTextFormat(Qt.TextFormat.PlainText)
+            details.setWordWrap(True)
+            box.addWidget(details)
             buttons = QHBoxLayout()
             approve, reject = QPushButton("Approve"), QPushButton("Reject")
             pid = str(row["proposal_id"])
@@ -159,6 +226,7 @@ class PopoverCard(QWidget):
             self.status_changed.emit("active")
 
     def _decide(self, proposal_id: str, approved: bool) -> None:
+        self.activity.emit()
         if not self.db.decide_command(proposal_id, approved):
             self.answer.setPlainText("This proposal has already been handled.")
             self._refresh_pending()
@@ -229,4 +297,3 @@ class PopoverCard(QWidget):
                 self.runner.execute(proposal_id)
             except Exception:
                 log.exception("Could not finish an approved command during shutdown")
-

@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
@@ -55,12 +57,167 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(avatar.label.accessibleName(), "FileBot status")
         avatar.close()
 
+    def test_popover_stays_inside_active_screen_work_area(self) -> None:
+        avatar = AvatarBubble()
+        screen = avatar.screen()
+        self.assertIsNotNone(screen)
+        area = screen.availableGeometry()
+        avatar.move(area.topLeft())
+        avatar.show()
+        popover = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        popover.setFixedSize(390, 300)
+        avatar.show_popover(popover)
+        self.app.processEvents()
+
+        self.assertTrue(area.contains(popover.frameGeometry()))
+        popover.close()
+        avatar.close()
+
+    def test_popover_shows_local_model_feedback_while_chat_runs(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        class SlowRuntime:
+            def __init__(self) -> None:
+                self.release = threading.Event()
+
+            def ask(self, prompt: str) -> str:
+                self.release.wait(timeout=2)
+                return "Answer received"
+
+        runtime = SlowRuntime()
+        card = PopoverCard(engine=None, runtime=runtime, db=FakeDatabase())
+        card.input.setText("hello")
+        card.submit()
+        self.assertIn("Waiting for the local model", card.answer.toPlainText())
+        self.assertFalse(card.input.isEnabled())
+        runtime.release.set()
+        deadline = time.monotonic() + 2
+        while card._task is not None and card._task.isRunning() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertEqual(card.answer.toPlainText(), "Answer received")
+        self.assertTrue(card.input.isEnabled())
+        card.close()
+
+    def test_typing_resets_the_popover_idle_activity_timer(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        activity: list[bool] = []
+        card.activity.connect(lambda: activity.append(True))
+        card.show()
+        card.input.setFocus()
+        QTest.keyClicks(card.input, "search")
+        self.app.processEvents()
+
+        self.assertGreaterEqual(len(activity), len("search"))
+        card.close()
+
+    def test_search_results_show_full_path_and_snippet(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        path = r"C:\Users\lokes\Documents\notes.md"
+        card._received([{"path": path, "snippet": "The exact matching sentence."}], "")
+
+        item = card.results.item(0)
+        self.assertIn(path, item.text())
+        self.assertIn("The exact matching sentence.", item.text())
+        self.assertEqual(item.data(Qt.ItemDataRole.UserRole), path)
+        self.assertIn(path, item.toolTip())
+        self.assertIn("click Ask", card.answer.toPlainText())
+        card.close()
+
+    def test_chat_wait_feedback_reports_elapsed_time(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        card._show_wait_feedback()
+
+        self.assertIn("10 seconds", card.answer.toPlainText())
+        self.assertIn("Ollama loads the model", card.answer.toPlainText())
+        card.close()
+
+    def test_popover_displays_chat_text_before_the_turn_finishes(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        class SlowStreamingRuntime:
+            def __init__(self) -> None:
+                self.release = threading.Event()
+
+            def ask_streaming(self, prompt, on_delta) -> str:
+                on_delta("Partial answer")
+                self.release.wait(timeout=2)
+                return "Partial answer complete"
+
+        runtime = SlowStreamingRuntime()
+        card = PopoverCard(engine=None, runtime=runtime, db=FakeDatabase())
+        card.input.setText("hello")
+        card.submit()
+        deadline = time.monotonic() + 1
+        while "Partial answer" not in card.answer.toPlainText() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual(card.answer.toPlainText(), "Partial answer")
+        self.assertFalse(card._request_timer.isActive())
+        runtime.release.set()
+        deadline = time.monotonic() + 2
+        while card._task is not None and card._task.isRunning() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertEqual(card.answer.toPlainText(), "Partial answer complete")
+        card.close()
+
+    def test_empty_search_results_explain_that_the_index_has_no_match(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        card._received([], "")
+
+        self.assertEqual(card.results.count(), 0)
+        self.assertIn("No matching files", card.answer.toPlainText())
+        card.close()
+
+    def test_command_approval_shows_reason_and_directory_as_plain_text(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return [{"proposal_id": "pending-1", "risk_level": "gated",
+                         "command": "mkdir <new-folder>", "reason": "Create the requested folder",
+                         "cwd": r"C:\Users\lokes\Documents"}]
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        frame = card.pending.itemAt(0).widget()
+        details = frame.findChild(QLabel)
+
+        self.assertEqual(details.textFormat(), Qt.TextFormat.PlainText)
+        self.assertIn("Create the requested folder", details.text())
+        self.assertIn(r"C:\Users\lokes\Documents", details.text())
+        self.assertIn("mkdir <new-folder>", details.text())
+        card.close()
+
     def test_approved_commands_run_in_order_one_at_a_time(self) -> None:
         class FakeDatabase:
             def __init__(self) -> None:
                 self.rows = [
-                    {"proposal_id": "first", "risk_level": "gated", "command": "mkdir first"},
-                    {"proposal_id": "second", "risk_level": "gated", "command": "mkdir second"},
+                    {"proposal_id": "first", "risk_level": "gated", "command": "mkdir first",
+                     "reason": "create first", "cwd": "C:/"},
+                    {"proposal_id": "second", "risk_level": "gated", "command": "mkdir second",
+                     "reason": "create second", "cwd": "C:/"},
                 ]
 
             def pending_commands(self):
@@ -122,4 +279,3 @@ class LifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

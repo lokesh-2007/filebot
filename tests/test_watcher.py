@@ -1,4 +1,3 @@
-
 """Filesystem watcher debounce and shutdown behavior tests."""
 from __future__ import annotations
 
@@ -63,7 +62,7 @@ class FileWatcherTests(unittest.TestCase):
             db = Database(root / "state.sqlite3")
             db.initialize()
             watcher = FileWatcher({"index": {
-                "roots": [], "include_extensions": [".txt"], "exclude_dirs": [".git"],
+                "roots": [str(root)], "include_extensions": [".txt"], "exclude_dirs": [".git"],
                 "debounce_seconds": 0.02,
             }}, db)
             first = root / "first.txt"
@@ -85,7 +84,7 @@ class FileWatcherTests(unittest.TestCase):
             db = Database(root / "state.sqlite3")
             db.initialize()
             watcher = FileWatcher({"index": {
-                "roots": [], "include_extensions": [".txt"], "exclude_dirs": [".git"],
+                "roots": [str(root)], "include_extensions": [".txt"], "exclude_dirs": [".git"],
                 "debounce_seconds": 1.0,
             }}, db)
             new_tree = root / "new-tree"
@@ -112,7 +111,28 @@ class FileWatcherTests(unittest.TestCase):
             self.assertEqual(rows[str(stale_file.resolve())], "delete")
             watcher.stop()
 
+    def test_watcher_rejects_events_for_move_destinations_outside_roots(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            root = Path(directory) / "watched"
+            outside = Path(directory) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            db = Database(Path(directory) / "state.sqlite3")
+            db.initialize()
+            watcher = FileWatcher({"index": {
+                "roots": [str(root)], "include_extensions": [".txt"], "exclude_dirs": [],
+                "debounce_seconds": 0.01,
+            }}, db)
+
+            watcher.handler.on_created(FileCreatedEvent(str(outside / "external.txt")))
+            watcher.handler.on_created(DirCreatedEvent(str(outside / "external-tree")))
+            watcher.handler.on_created(FileCreatedEvent(str(root / "inside.txt")))
+            time.sleep(0.08)
+            watcher.stop()
+
+            self.assertEqual([row["path"] for row in db.pending_dirty()],
+                             [str((root / "inside.txt").resolve())])
+
 
 if __name__ == "__main__":
     unittest.main()
-

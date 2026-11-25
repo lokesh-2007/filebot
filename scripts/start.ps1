@@ -23,4 +23,3 @@ if (-not (Test-Path $pythonw)) {
 $quotedApp = '"' + $app + '"'
 Start-Process -FilePath $pythonw -ArgumentList $quotedApp -WorkingDirectory $projectRoot -WindowStyle Hidden
 Write-Host "FileBot is starting in the desktop session. Use the configured global hotkey to open it."
-

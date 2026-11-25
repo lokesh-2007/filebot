@@ -7,10 +7,18 @@ from pathlib import Path
 import threading
 from typing import Any
 
+from filebot_config import expand_config_path, path_is_within_roots
 from retrieval.parsers import parse_file
 from storage.db import Database
 
 log = logging.getLogger(__name__)
+
+
+def _same_file_revision(left: Any, right: Any) -> bool:
+    """Compare metadata that should remain stable across one indexing pass."""
+    return (left.st_size, left.st_mtime_ns, getattr(left, "st_ino", None)) == (
+        right.st_size, right.st_mtime_ns, getattr(right, "st_ino", None)
+    )
 
 
 class IndexWorker:
@@ -32,11 +40,18 @@ class IndexWorker:
         processed = 0
         corpus_changed = False
         config = self.settings["index"]
+        roots = [expand_config_path(root) for root in config.get("roots", [])]
         for row in self.db.pending_dirty(limit):
             if stop_event is not None and stop_event.is_set():
                 break
             path = Path(row["path"])
             try:
+                if (row["operation"] != "delete" and "roots" in config
+                        and not path_is_within_roots(path, roots)):
+                    log.warning("Discarding queued index path outside configured roots: %s", path)
+                    self.db.remove_dirty(path, float(row["queued_at"]))
+                    processed += 1
+                    continue
                 if row["operation"] == "delete" or not path.exists():
                     self.engine.delete(path, refresh_lexical=False)
                     self.db.delete_file(path)
@@ -50,24 +65,48 @@ class IndexWorker:
                         self.db.remove_dirty(path, float(row["queued_at"]))
                         processed += 1
                         continue
-                    raw = path.read_bytes()
-                    digest = hashlib.sha256(raw).hexdigest()
-                    del raw
+                    digest_builder = hashlib.sha256()
+                    with path.open("rb") as source:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            digest_builder.update(block)
+                    digest = digest_builder.hexdigest()
+                    hashed_stat = path.stat()
+                    if not _same_file_revision(stat, hashed_stat):
+                        log.debug("File changed while hashing; requeuing %s", path)
+                        self.db.enqueue_dirty(path, "upsert")
+                        continue
                     current = self.db.get_file(path)
                     if current and current["status"] == "indexed" and current["content_hash"] == digest:
+                        if not _same_file_revision(hashed_stat, path.stat()):
+                            log.debug("File changed before acknowledging index event; requeuing %s", path)
+                            self.db.enqueue_dirty(path, "upsert")
+                            continue
                         self.engine.delete_obsolete(path, self.db.vector_ids_for_file(path))
                         self.db.remove_dirty(path, float(row["queued_at"]))
                         processed += 1
                         continue
-                    parsed = parse_file(path, int(config.get("chunk_chars", 1200)), int(config.get("chunk_overlap", 150)))
+                    parsed = parse_file(
+                        path,
+                        int(config.get("chunk_chars", 1200)),
+                        int(config.get("chunk_overlap", 150)),
+                        max_chars=int(config.get("max_extracted_chars", 5_000_000)),
+                        max_docx_uncompressed_bytes=int(
+                            config.get("max_docx_uncompressed_bytes", 100_000_000)
+                        ),
+                    )
+                    parsed_stat = path.stat()
+                    if not _same_file_revision(hashed_stat, parsed_stat):
+                        log.debug("File changed while parsing; requeuing %s", path)
+                        self.db.enqueue_dirty(path, "upsert")
+                        continue
                     records = [{"text": item.text, "page_or_line": item.page_or_line, "heading": item.heading} for item in parsed]
                     # Commit vectors before marking the SQLite digest current. If the
                     # process stops between these operations, the durable dirty row
                     # causes a safe vector upsert on the next wake instead of falsely
                     # treating an incomplete index operation as complete.
                     self.engine.upsert(path, parsed, content_hash=digest, refresh_lexical=False)
-                    self.db.replace_file(path, content_hash=digest, size=stat.st_size,
-                                         mtime=stat.st_mtime, chunks=records)
+                    self.db.replace_file(path, content_hash=digest, size=hashed_stat.st_size,
+                                         mtime=hashed_stat.st_mtime, chunks=records)
                     self.engine.delete_obsolete(path, self.db.vector_ids_for_file(path))
                     corpus_changed = True
                 self.db.remove_dirty(path, float(row["queued_at"]))
@@ -116,4 +155,3 @@ class IndexQueueService:
         self._stop.set()
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join()
-

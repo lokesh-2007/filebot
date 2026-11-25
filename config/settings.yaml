@@ -17,6 +17,8 @@ index:
     - .venv
     - node_modules
   max_file_bytes: 52428800
+  max_extracted_chars: 5000000
+  max_docx_uncompressed_bytes: 100000000
   chunk_chars: 1200
   chunk_overlap: 150
   debounce_seconds: 1.0
@@ -41,4 +43,3 @@ models:
 runtime:
   idle_unload_seconds: 120
   hotkey: "<ctrl>+<alt>+<space>"
-

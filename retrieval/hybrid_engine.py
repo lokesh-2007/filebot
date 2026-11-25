@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
-from filebot_config import expand_config_path
+from filebot_config import expand_config_path, path_is_within_roots
 from storage.db import Database
 
 log = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ class HybridEngine:
     """Owns heavy embedding/search objects only while the assistant is awake."""
     def __init__(self, settings: dict[str, Any], db: Database) -> None:
         self.settings, self.db = settings, db
+        self.roots = [expand_config_path(root) for root in settings.get("index", {}).get("roots", [])]
+        self._restrict_roots = "roots" in settings.get("index", {})
         self._embedder = self._collection = self._client = None
         self._bm25 = self._tokens = self._corpus = self._rows = None
         self._lock = threading.RLock()
@@ -36,6 +39,8 @@ class HybridEngine:
     def _refresh_bm25(self) -> None:
         with self._lock:
             rows = self.db.all_chunks()
+            if self._restrict_roots:
+                rows = [row for row in rows if path_is_within_roots(row["path"], self.roots)]
             self._rows = rows
             self._corpus = [str(row["snippet"]) for row in rows]
             if not rows:
@@ -119,7 +124,15 @@ class HybridEngine:
             return self._search_locked(query, limit)
 
     def _search_locked(self, query: str, limit: int) -> list[dict[str, Any]]:
-        if not query.strip() or self._embedder is None:
+        normalized_query = query.strip()
+        if not normalized_query:
+            return []
+        # Dense embeddings blur terse identifiers such as h1, API, and C#.
+        # For a single short token, return only exact token matches so unrelated
+        # documents do not outrank an empty result through semantic similarity.
+        if len(normalized_query.split()) == 1 and len(normalized_query) <= 3:
+            return self._search_short_token(normalized_query, limit)
+        if self._embedder is None:
             return []
         take = max(limit * 4, 20)
         dense: list[str] = []
@@ -145,12 +158,32 @@ class HybridEngine:
                 log.exception("BM25 search failed")
         if not lexical:
             for row in self.db.search_lexical(query, take):
+                if self._restrict_roots and not path_is_within_roots(row["path"], self.roots):
+                    continue
                 key = str(row["chunk_id"])
                 lexical.append(key)
                 if key not in known_ids:
                     rows.append(row)
                     known_ids.add(key)
         return self.reciprocal_rank_fusion(dense, lexical, rows, limit)
+
+    def _search_short_token(self, query: str, limit: int) -> list[dict[str, Any]]:
+        """Rank exact short-token hits in the already-loaded SQLite chunk rows."""
+        pattern = re.compile(rf"(?<!\w){re.escape(query)}(?!\w)", re.IGNORECASE)
+        matches: list[tuple[int, int, Any]] = []
+        for position, row in enumerate(self._rows or []):
+            text = f"{row['file_name']}\n{row['snippet']}"
+            count = sum(1 for _ in pattern.finditer(text))
+            if count:
+                matches.append((count, position, row))
+        matches.sort(key=lambda item: (-item[0], item[1]))
+        return [{
+            "path": row["path"],
+            "snippet": row["snippet"],
+            "score": count / (count + 1.0),
+            "page_or_line": row["page_or_line"],
+            "heading": row["heading"],
+        } for count, _, row in matches[:max(0, limit)]]
 
     def close(self) -> None:
         """Release references to all heavyweight objects so they can unload."""

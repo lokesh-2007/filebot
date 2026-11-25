@@ -41,6 +41,10 @@ def load_settings(path: str | Path) -> dict[str, Any]:
     if not isinstance(excluded, list) or any(not isinstance(name, str) or not name for name in excluded):
         raise RuntimeError("FileBot setting 'index.exclude_dirs' must be a list of directory names")
     _validate_number(index.get("max_file_bytes", 50 * 1024 * 1024), "index.max_file_bytes", minimum=1, integer=True)
+    _validate_number(index.get("max_extracted_chars", 5_000_000),
+                     "index.max_extracted_chars", minimum=1, integer=True)
+    _validate_number(index.get("max_docx_uncompressed_bytes", 100_000_000),
+                     "index.max_docx_uncompressed_bytes", minimum=1, integer=True)
     chunk_chars = _validate_number(index.get("chunk_chars", 1200), "index.chunk_chars", minimum=100, integer=True)
     overlap = _validate_number(index.get("chunk_overlap", 150), "index.chunk_overlap", minimum=0, integer=True)
     if overlap >= chunk_chars:
@@ -90,3 +94,23 @@ def expand_config_path(value: str | Path) -> Path:
         raise ValueError("Configured path cannot be empty")
     return Path(expanded)
 
+
+def path_is_within_roots(path: str | Path, roots: list[str | Path]) -> bool:
+    """Return whether a resolved path is contained by any configured root.
+
+    Resolution follows existing symlinks, preventing an in-root link from
+    silently extending the index or file-open scope to another directory.
+    Invalid paths and symlink loops fail closed.
+    """
+    try:
+        candidate = Path(path).expanduser().resolve()
+        for configured_root in roots:
+            root = Path(configured_root).expanduser().resolve()
+            try:
+                candidate.relative_to(root)
+                return True
+            except ValueError:
+                continue
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return False

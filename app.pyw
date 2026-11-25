@@ -13,6 +13,7 @@ from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
 from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
+from filebot_version import __version__
 from storage.db import Database
 from ui.avatar_bubble import AvatarBubble
 from ui.hotkey_bridge import HotkeyBridge
@@ -36,6 +37,9 @@ def main() -> int:
         handlers=handlers, force=True,
     )
     app = QApplication(sys.argv)
+    app.setApplicationName("FileBot")
+    app.setApplicationDisplayName("FileBot")
+    app.setApplicationVersion(__version__)
     guard = InstanceGuard(db_path.parent / "filebot.lock")
     if not guard.acquire():
         QMessageBox.information(None, "FileBot is already running",
@@ -44,6 +48,12 @@ def main() -> int:
     try:
         db = Database(db_path)
         db.initialize()
+        requeued, interrupted = db.recover_command_states()
+        if requeued or interrupted:
+            logging.warning(
+                "Recovered command audit after an unclean shutdown: %d require re-approval, %d interrupted",
+                requeued, interrupted,
+            )
         lifecycle = LifecycleManager(settings, db, root)
         avatar = AvatarBubble()
         watcher = FileWatcher(settings, db)
@@ -85,4 +95,3 @@ if __name__ == "__main__":
         except Exception:
             pass
         raise
-
