@@ -338,6 +338,7 @@ pub fn open_indexed_path(
             .arg(&path)
             .spawn()
             .map_err(|error| AgentError::FileOperation(error.to_string()))?;
+        database.record_file_open(&path)?;
         Ok(format!("Opened {}", path.display()))
     }
     #[cfg(not(windows))]

@@ -28,6 +28,14 @@ pub struct Settings {
     pub index: IndexSettings,
     pub models: ModelsSettings,
     pub runtime: RuntimeSettings,
+    #[serde(default)]
+    pub retrieval: RetrievalSettings,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RetrievalSettings {
+    #[serde(default)]
+    pub glossary: std::collections::HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -190,6 +198,23 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
             "database and vector store paths must be configured".into(),
         ));
     }
+    let mut glossary_aliases = std::collections::HashSet::new();
+    for (alias, expansion) in &settings.retrieval.glossary {
+        if alias.trim().is_empty()
+            || alias.chars().count() > 100
+            || expansion.trim().is_empty()
+            || expansion.chars().count() > 500
+        {
+            return Err(ConfigError::Invalid(
+                "glossary aliases and expansions must be non-empty and bounded".into(),
+            ));
+        }
+        if !glossary_aliases.insert(alias.trim().to_lowercase()) {
+            return Err(ConfigError::Invalid(
+                "glossary aliases must be unique ignoring case".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -321,6 +346,20 @@ mod tests {
         assert!(validate(&settings).is_err());
         settings.models.ollama.num_ctx = 4096;
         settings.models.ollama.num_predict = 10_000;
+        assert!(validate(&settings).is_err());
+    }
+
+    #[test]
+    fn validates_glossary_aliases_and_expansions() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/settings.yaml");
+        let mut settings = load_settings(path).unwrap();
+        settings.retrieval.glossary = std::collections::HashMap::from([
+            ("spec".into(), "product specification".into()),
+            ("SPEC".into(), "duplicate alias".into()),
+        ]);
+        assert!(validate(&settings).is_err());
+        settings.retrieval.glossary =
+            std::collections::HashMap::from([("spec".into(), " ".into())]);
         assert!(validate(&settings).is_err());
     }
 

@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS file_signals (
 CREATE TABLE IF NOT EXISTS glossary (
     alias TEXT PRIMARY KEY COLLATE NOCASE, expansion TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cmd_audit (
     proposal_id TEXT PRIMARY KEY,
     session_key TEXT NOT NULL DEFAULT '',
@@ -396,6 +397,149 @@ impl Database {
             [normalized],
             |row| row.get::<_, bool>(0),
         )?)
+    }
+
+    /// Seed configured shorthand once; later database edits remain authoritative.
+    pub fn seed_glossary_entries(
+        &self,
+        entries: &std::collections::HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        let entries = validate_glossary(entries)?;
+        let mut connection = self.connect()?;
+        let tx = connection.transaction()?;
+        let seeded = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_state WHERE key='glossary_seeded')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !seeded {
+            for (alias, expansion) in entries {
+                tx.execute(
+                    "INSERT INTO glossary(alias,expansion) VALUES(?1,?2) ON CONFLICT(alias) DO NOTHING",
+                    params![alias, expansion],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO app_state(key,value) VALUES('glossary_seeded','1')",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Replace the user's full shorthand glossary atomically.
+    pub fn replace_glossary_entries(
+        &self,
+        entries: &std::collections::HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        let entries = validate_glossary(entries)?;
+        let mut connection = self.connect()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM glossary", [])?;
+        for (alias, expansion) in entries {
+            tx.execute(
+                "INSERT INTO glossary(alias,expansion) VALUES(?1,?2)",
+                params![alias, expansion],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO app_state(key,value) VALUES('glossary_seeded','1') ON CONFLICT(key) DO NOTHING",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Expand configured aliases at token boundaries, longest alias first.
+    pub fn expand_glossary(&self, query: &str) -> Result<String, StorageError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT alias,expansion FROM glossary ORDER BY length(alias) DESC,alias COLLATE NOCASE",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut expanded = query.to_owned();
+        for row in rows {
+            let (alias, replacement) = row?;
+            let escaped = regex::escape(alias.trim());
+            let pattern = regex::Regex::new(&format!(r"(?i){escaped}"))
+                .map_err(|error| StorageError::InvalidValue(error.to_string()))?;
+            let mut result = String::with_capacity(expanded.len());
+            let mut copied_until = 0;
+            for matched in pattern.find_iter(&expanded) {
+                let before = expanded[..matched.start()].chars().next_back();
+                let after = expanded[matched.end()..].chars().next();
+                let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+                if before.is_some_and(is_word) || after.is_some_and(is_word) {
+                    continue;
+                }
+                result.push_str(&expanded[copied_until..matched.start()]);
+                result.push_str(&replacement);
+                copied_until = matched.end();
+            }
+            if copied_until > 0 {
+                result.push_str(&expanded[copied_until..]);
+                expanded = result;
+            }
+        }
+        Ok(expanded)
+    }
+
+    /// Record a successful result open for future ranking.
+    pub fn record_file_open(&self, path: impl AsRef<Path>) -> Result<bool, StorageError> {
+        let normalized = normalize_path(path.as_ref())?;
+        let connection = self.connect()?;
+        let changed = connection.execute(
+            "INSERT INTO file_signals(file_id,open_count,last_opened) \
+             SELECT file_id,1,unixepoch('subsec') FROM files WHERE path=?1 COLLATE NOCASE \
+             ON CONFLICT(file_id) DO UPDATE SET open_count=open_count+1,last_opened=excluded.last_opened",
+            [normalized],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Record one helpful/unhelpful result vote.
+    pub fn record_file_feedback(
+        &self,
+        path: impl AsRef<Path>,
+        vote: &str,
+    ) -> Result<bool, StorageError> {
+        if !matches!(vote, "up" | "down") {
+            return Err(StorageError::InvalidValue(
+                "vote must be 'up' or 'down'".into(),
+            ));
+        }
+        let normalized = normalize_path(path.as_ref())?;
+        let column = if vote == "up" { "upvotes" } else { "downvotes" };
+        let connection = self.connect()?;
+        let changed = connection.execute(
+            &format!("INSERT INTO file_signals(file_id,{column}) SELECT file_id,1 FROM files WHERE path=?1 COLLATE NOCASE \
+             ON CONFLICT(file_id) DO UPDATE SET {column}={column}+1"),
+            [normalized],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Bounded score adjustment shared by lexical and dense ranking paths.
+    pub fn file_signal_boost(&self, path: &str) -> Result<f64, StorageError> {
+        let connection = self.connect()?;
+        let signal = connection.query_row(
+            "SELECT open_count,upvotes,downvotes FROM file_signals s JOIN files f USING(file_id) \
+             WHERE f.path=?1 COLLATE NOCASE",
+            [path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+        ).optional()?;
+        let Some((opens, upvotes, downvotes)) = signal else {
+            return Ok(0.0);
+        };
+        let vote_delta = if upvotes >= downvotes {
+            (upvotes - downvotes) as f64
+        } else {
+            -((downvotes - upvotes) as f64)
+        };
+        Ok((0.001 * (opens.max(0) as f64).ln_1p() + 0.003 * vote_delta).clamp(-0.01, 0.008))
     }
 
     /// Search indexed paths and snippets using parameterized substring matches.
@@ -776,6 +920,33 @@ fn command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandRecord> 
     })
 }
 
+fn validate_glossary(
+    entries: &std::collections::HashMap<String, String>,
+) -> Result<Vec<(String, String)>, StorageError> {
+    let mut seen = std::collections::HashSet::new();
+    for (alias, expansion) in entries {
+        let key = alias.trim().to_lowercase();
+        if key.is_empty()
+            || alias.chars().count() > 100
+            || expansion.trim().is_empty()
+            || expansion.chars().count() > 500
+        {
+            return Err(StorageError::InvalidValue(
+                "glossary aliases and expansions must be non-empty and bounded".into(),
+            ));
+        }
+        if !seen.insert(key) {
+            return Err(StorageError::InvalidValue(
+                "glossary aliases must be unique ignoring case".into(),
+            ));
+        }
+    }
+    Ok(entries
+        .iter()
+        .map(|(alias, expansion)| (alias.trim().to_owned(), expansion.trim().to_owned()))
+        .collect())
+}
+
 fn unix_time() -> Result<f64, StorageError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1034,6 +1205,64 @@ mod tests {
         assert_eq!(db.search_lexical("fresh", 10).unwrap().len(), 1);
         assert!(db.delete_file(&path).unwrap());
         assert!(db.search_lexical("fresh", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn glossary_edits_persist_expand_at_boundaries_and_seed_only_once() {
+        let (_dir, db) = database();
+        let defaults =
+            std::collections::HashMap::from([("spec".into(), "product specification".into())]);
+        db.seed_glossary_entries(&defaults).unwrap();
+        assert_eq!(
+            db.expand_glossary("SPEC spec sheet and speck").unwrap(),
+            "product specification product specification sheet and speck"
+        );
+        let edited =
+            std::collections::HashMap::from([("pbrief".into(), "product $specification".into())]);
+        db.replace_glossary_entries(&edited).unwrap();
+        db.seed_glossary_entries(&defaults).unwrap();
+        assert_eq!(
+            db.expand_glossary("pbrief").unwrap(),
+            "product $specification"
+        );
+        assert_eq!(db.expand_glossary("spec").unwrap(), "spec");
+        assert!(
+            db.replace_glossary_entries(&std::collections::HashMap::from([(
+                " ".into(),
+                "bad".into()
+            )]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn open_and_feedback_signals_produce_bounded_ranking_boosts() {
+        let (dir, db) = database();
+        let file = dir.path().join("result.md");
+        db.replace_file(
+            &file,
+            "hash",
+            10,
+            1.0,
+            &[ChunkInput {
+                text: "retention policy details".into(),
+                page_or_line: None,
+                heading: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(db.file_signal_boost(&file.to_string_lossy()).unwrap(), 0.0);
+        assert!(db.record_file_open(&file).unwrap());
+        assert!(db.record_file_feedback(&file, "up").unwrap());
+        assert!(db.file_signal_boost(&file.to_string_lossy()).unwrap() > 0.003);
+        for _ in 0..20 {
+            db.record_file_feedback(&file, "down").unwrap();
+        }
+        assert_eq!(
+            db.file_signal_boost(&file.to_string_lossy()).unwrap(),
+            -0.01
+        );
+        assert!(db.record_file_feedback(&file, "invalid").is_err());
     }
 
     #[test]

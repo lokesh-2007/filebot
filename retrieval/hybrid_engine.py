@@ -101,6 +101,17 @@ class HybridEngine:
         with self._lock:
             self._refresh_bm25()
 
+    def refresh_file_signal(self, path: str | Path) -> None:
+        """Refresh one file's ranking counters without rebuilding the corpus index."""
+        with self._lock:
+            normalized = str(Path(path).expanduser().resolve())
+            opens, upvotes, downvotes = self.db.file_signal_counts(normalized)
+            for index, row in enumerate(self._rows or []):
+                if str(Path(str(row["path"])).expanduser().resolve()) == normalized:
+                    updated = dict(row)
+                    updated.update(open_count=opens, upvotes=upvotes, downvotes=downvotes)
+                    self._rows[index] = updated
+
     @staticmethod
     def reciprocal_rank_fusion(
         dense_ids: list[str], lexical_ids: list[str], rows: list[Any], limit: int, *, k: int = 60,

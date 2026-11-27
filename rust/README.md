@@ -21,6 +21,11 @@ application passes the Windows UI and performance gates below.
   transactional SQLite chunk storage.
 - SQLite FTS5 lexical ranking plus fastembed BGE-small ONNX vectors, stored as
   float32 blobs and ranked with cosine similarity and reciprocal rank fusion.
+- Configured glossary aliases seed SQLite once, user entries can be replaced
+  transactionally, and Rust search expands aliases at word boundaries.
+- Successful opens and helpful/unhelpful votes persist in the shared
+  `file_signals` table and apply a bounded ranking adjustment; the native UI
+  exposes votes for its selected result.
 - ONNX and model weights remain unloaded until `HybridEngine::activate()`; an
   inactive engine still serves local FTS5 search. The model is cached locally
   after first use, and subsequent activation can run without network access.

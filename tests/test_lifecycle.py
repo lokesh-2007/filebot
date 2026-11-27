@@ -251,7 +251,7 @@ class LifecycleTests(unittest.TestCase):
         class FakeEngine:
             refreshed = False
 
-            def refresh_lexical_index(self) -> None:
+            def refresh_file_signal(self, _path: str) -> None:
                 self.refreshed = True
 
         class FakeDatabase:

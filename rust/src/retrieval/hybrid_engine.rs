@@ -34,6 +34,7 @@ pub struct HybridEngine {
 impl HybridEngine {
     /// Build a dormant engine from validated settings without loading the model.
     pub fn new(settings: &Settings, db: Database) -> Result<Self, RetrievalError> {
+        db.seed_glossary_entries(&settings.retrieval.glossary)?;
         let model_label = settings.models.embeddings.model.trim().to_owned();
         let model_name = resolve_model(&model_label)?;
         Ok(Self {
@@ -102,6 +103,7 @@ impl HybridEngine {
     /// Search with BM25-style FTS5 plus cosine similarity, fused by reciprocal ranks.
     /// If ONNX is unavailable or inactive, lexical search remains available offline.
     pub fn search(&mut self, query: &str, limit: usize) -> Result<Vec<SearchHit>, RetrievalError> {
+        let query = self.db.expand_glossary(query.trim())?;
         let query = query.trim();
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -114,7 +116,7 @@ impl HybridEngine {
         let take = limit.saturating_mul(4).clamp(20, 1000);
         let lexical = self.db.search_lexical(query, take)?;
         if self.embedder.is_none() {
-            return Ok(lexical.into_iter().take(limit.min(100)).collect());
+            return self.apply_feedback(lexical, limit.min(100));
         }
 
         // Indexing is incremental. This keeps each wake responsive and resumes on the
@@ -130,7 +132,21 @@ impl HybridEngine {
             .next()
             .unwrap_or_default();
         let dense = self.db.search_dense(&query_vector, take)?;
-        Ok(reciprocal_rank_fusion(dense, lexical, limit.min(100)))
+        let fused = reciprocal_rank_fusion(dense, lexical, limit.min(100));
+        self.apply_feedback(fused, limit.min(100))
+    }
+
+    fn apply_feedback(
+        &self,
+        mut hits: Vec<SearchHit>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, RetrievalError> {
+        for hit in &mut hits {
+            hit.score += self.db.file_signal_boost(&hit.path)?;
+        }
+        hits.sort_by(|left, right| right.score.total_cmp(&left.score));
+        hits.truncate(limit);
+        Ok(hits)
     }
 
     /// The model label is exposed for diagnostics without exposing cache contents.

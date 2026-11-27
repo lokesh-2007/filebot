@@ -279,6 +279,17 @@ class Database:
             )
         return True
 
+    def file_signal_counts(self, path: str | Path) -> tuple[int, int, int]:
+        """Return the current open/up/down counts for one indexed path."""
+        normalized = str(Path(path).expanduser().resolve())
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT COALESCE(s.open_count,0),COALESCE(s.upvotes,0),COALESCE(s.downvotes,0)
+                   FROM files f LEFT JOIN file_signals s USING(file_id) WHERE f.path=?""",
+                (normalized,),
+            ).fetchone()
+        return (int(row[0]), int(row[1]), int(row[2])) if row is not None else (0, 0, 0)
+
     def set_glossary_entries(self, entries: dict[str, str]) -> None:
         """Persist validated shorthand expansions without removing user entries."""
         normalized: list[tuple[str, str]] = []

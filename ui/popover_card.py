@@ -344,6 +344,9 @@ class PopoverCard(QWidget):
         if path:
             try:
                 self.file_ops.open_file(path)
+                refresh = getattr(self.engine, "refresh_file_signal", None)
+                if callable(refresh):
+                    refresh(path)
             except (OSError, ValueError) as exc:
                 log.exception("Could not open indexed file %s", path)
                 self.answer.setPlainText(f"Could not open {path}: {exc}")
@@ -363,7 +366,7 @@ class PopoverCard(QWidget):
             return
         try:
             if self.db.record_file_feedback(str(path), vote):
-                refresh = getattr(self.engine, "refresh_lexical_index", None)
+                refresh = getattr(self.engine, "refresh_file_signal", None)
                 if callable(refresh):
                     refresh()
                 label = "Helpful" if vote == "up" else "Not helpful"

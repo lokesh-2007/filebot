@@ -169,7 +169,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
             before = engine.search("retention policy")
             self.assertEqual(Path(before[0]["path"]).name, "retention-policy.md")
             db.record_file_feedback(root / "retention-policy-draft.md", "up")
-            engine.refresh_lexical_index()
+            engine.refresh_file_signal(root / "retention-policy-draft.md")
             after = engine.search("retention policy")
             self.assertEqual(Path(after[0]["path"]).name, "retention-policy-draft.md")
 

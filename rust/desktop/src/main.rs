@@ -71,6 +71,8 @@ const ID_EXIT: usize = 109;
 const ID_STATUS: usize = 110;
 const ID_RESULTS: usize = 111;
 const ID_OPEN_SELECTED: usize = 112;
+const ID_HELPFUL: usize = 113;
+const ID_UNHELPFUL: usize = 114;
 
 type Runtime = BotRuntime<LocalOllamaClient, FileBotTools>;
 type Lifecycle = LifecycleManager<Runtime>;
@@ -234,6 +236,28 @@ unsafe extern "system" fn window_proc(
             160,
             28,
         );
+        create_control(
+            hwnd,
+            "BUTTON",
+            "Helpful",
+            ID_HELPFUL,
+            BS_PUSHBUTTON as u32,
+            184,
+            238,
+            90,
+            28,
+        );
+        create_control(
+            hwnd,
+            "BUTTON",
+            "Not helpful",
+            ID_UNHELPFUL,
+            BS_PUSHBUTTON as u32,
+            284,
+            238,
+            100,
+            28,
+        );
         state.pending_label = create_control(
             hwnd,
             "STATIC",
@@ -299,6 +323,8 @@ unsafe extern "system" fn window_proc(
             match id {
                 ID_SEARCH => search(state),
                 ID_OPEN_SELECTED => open_selected(state),
+                ID_HELPFUL => record_feedback(state, true),
+                ID_UNHELPFUL => record_feedback(state, false),
                 ID_RESULTS if notification == LBN_DBLCLK as usize => open_selected(state),
                 ID_ASK => ask(state),
                 ID_CANCEL => {
@@ -469,7 +495,15 @@ fn search(state: &mut AppState) {
     let tx = state.tx.clone();
     thread::spawn(move || {
         let result = db
-            .search_lexical(&query, 12)
+            .expand_glossary(&query)
+            .and_then(|expanded| {
+                let mut hits = db.search_lexical(&expanded, 12)?;
+                for hit in &mut hits {
+                    hit.score += db.file_signal_boost(&hit.path)?;
+                }
+                hits.sort_by(|left, right| right.score.total_cmp(&left.score));
+                Ok(hits)
+            })
             .map_err(|error| error.to_string());
         let _ = tx.send(UiEvent::SearchFinished(result));
     });
@@ -493,10 +527,38 @@ fn open_selected(state: &mut AppState) {
     let db = state.db.clone();
     let tx = state.tx.clone();
     thread::spawn(move || {
-        let result = open_indexed_path(&db, &roots, &path)
-            .map(|message| UiEvent::Delta(format!("\r\n{message}")))
-            .unwrap_or_else(|error| UiEvent::Delta(format!("\r\nCould not open file: {error}")));
+        let result = match open_indexed_path(&db, &roots, &path) {
+            Ok(message) => UiEvent::Delta(format!("\r\n{message}")),
+            Err(error) => UiEvent::Delta(format!("\r\nCould not open file: {error}")),
+        };
         let _ = tx.send(result);
+    });
+}
+
+fn record_feedback(state: &mut AppState, helpful: bool) {
+    let selected = unsafe { SendMessageW(state.results_list, LB_GETCURSEL, 0, 0) };
+    if selected == LB_ERR as isize || selected < 0 {
+        append_output(state.output, "\r\nSelect a search result before rating it.");
+        return;
+    }
+    let Some(hit) = state.search_results.get(selected as usize) else {
+        append_output(
+            state.output,
+            "\r\nThat search result is no longer available.",
+        );
+        return;
+    };
+    let path = hit.path.clone();
+    let db = state.db.clone();
+    let tx = state.tx.clone();
+    let vote = if helpful { "up" } else { "down" };
+    thread::spawn(move || {
+        let message = match db.record_file_feedback(&path, vote) {
+            Ok(true) => "Feedback saved; it will influence later searches.".to_owned(),
+            Ok(false) => "This file is no longer in FileBot's index.".to_owned(),
+            Err(error) => format!("Could not save feedback: {error}"),
+        };
+        let _ = tx.send(UiEvent::Delta(format!("\r\n{message}")));
     });
 }
 

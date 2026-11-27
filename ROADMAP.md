@@ -45,8 +45,10 @@ still being validated.
   latency targets are goals, not measured claims yet.
 - Complete Rust feature parity, including local model start/recovery, hybrid
   retrieval feedback/glossary behavior, accessible result opening, and Windows
-  UI verification. Keep Python as the default until parity and measurements
-  pass.
+  UI verification. The core now expands persisted glossary entries and ranks
+  open/vote signals, and the native UI can record votes; a Rust glossary editor,
+  local model start/recovery, and Windows UI verification remain open. Keep
+  Python as the default until parity and measurements pass.
 - Package and validate a clean Windows install, including persistent settings,
   model setup, upgrades, and a signed installer before a general release.
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## Rust retrieval signal parity 0.6.10 — 2026-11-27
+
+- Wire the Rust settings glossary into one-time SQLite seeding and query
+  expansion; support transactional glossary edits in the core database.
+- Record successful indexed-file opens and Helpful/Not helpful votes in the
+  shared signal table, and apply bounded signals to native search ranking.
+- Add native desktop feedback buttons for the selected result.
+- Refresh only the selected file's cached ranking counters after a Python UI
+  open or vote, avoiding a full-corpus BM25 rebuild on the GUI thread.
+- Verify formatting, clippy, and Rust core/desktop type checking. Rust test
+  binaries could not link here because the ONNX Runtime download is unavailable;
+  Windows execution and live model behavior remain unverified.
+
 ## Retrieval relevance checks 0.6.9 — 2026-11-27
 
 - Add an offline SQLite corpus regression for an edited glossary alias and
