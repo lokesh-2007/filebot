@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
-from PyQt6.QtWidgets import QLabel, QWidget
+from PyQt6.QtGui import QContextMenuEvent, QMouseEvent
+from PyQt6.QtWidgets import QLabel, QMenu, QWidget
 
 
 class AvatarBubble(QWidget):
     toggled = pyqtSignal()
     status_changed = pyqtSignal(str)
+    quit_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
@@ -84,3 +85,13 @@ class AvatarBubble(QWidget):
             else:
                 self.toggled.emit()
             self._offset = None
+
+    def create_context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        quit_action = menu.addAction("Quit FileBot")
+        quit_action.triggered.connect(self.quit_requested)
+        return menu
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = self.create_context_menu()
+        menu.exec(event.globalPos())

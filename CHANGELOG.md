@@ -1,5 +1,15 @@
 # Changelog
 
+## Product setup and shutdown polish 0.6.14 — 2026-11-27
+
+- Add a right-click avatar menu with an explicit Quit FileBot action so users
+  can cleanly stop background services before updating the source checkout.
+- Document the source-based upgrade steps, persistent data locations, and the
+  remaining signed-installer gate. Correct outdated Python version and parser
+  coverage claims in the README.
+- The avatar menu action is covered by a Qt lifecycle test; installer signing
+  and automated installer upgrades remain unimplemented.
+
 ## Normalize Rust retrieval signal paths 0.6.13 — 2026-11-27
 
 - Normalize paths when reading ranking signals, matching the canonical path

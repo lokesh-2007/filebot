@@ -34,6 +34,8 @@ still being validated.
 - Windows Qt integration tests now cover avatar and hotkey-bridge wake,
   selected-file open and feedback persistence, CMD audit approval/rejection,
   and idle resource unload. Existing Qt tests cover streamed chat and cancel.
+- Right-clicking the avatar now exposes a clean Quit action for controlled
+  shutdown before a source-based update.
 
 ## Remaining product requirements
 
@@ -41,7 +43,7 @@ still being validated.
   deterministic SQLite lexical fixture now checks edited glossary expansion
   and same-session feedback ranking, but semantic ranking on a real local
   corpus remains unvalidated.
-- Verify the new Windows UI acceptance flows in CI and add live
+- Windows UI acceptance flows pass in CI on Python 3.11 and 3.12. Add live
   Ollama/physical-keyboard coverage for streamed chat, cancellation, and
   wake-to-idle behavior.
 - Measure cold startup, wake-to-search, wake-to-first-token, peak and dormant

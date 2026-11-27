@@ -153,6 +153,17 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(second.acquire())
             second.release()
 
+    def test_avatar_context_menu_exposes_quit_action(self) -> None:
+        avatar = AvatarBubble()
+        requested = []
+        avatar.quit_requested.connect(lambda: requested.append(True))
+        menu = avatar.create_context_menu()
+        self.assertEqual([action.text() for action in menu.actions()], ["Quit FileBot"])
+        menu.actions()[0].trigger()
+        self.assertEqual(requested, [True])
+        menu.close()
+        avatar.close()
+
     def test_avatar_exposes_a_named_status_window(self) -> None:
         avatar = AvatarBubble()
         self.assertEqual(avatar.windowTitle(), "FileBot")

@@ -1,4 +1,4 @@
-# FileBot 0.6.13
+# FileBot 0.6.14
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
 
@@ -11,7 +11,7 @@ See [ROADMAP.md](ROADMAP.md) for the attached architecture plan's implemented fe
 The native Rust migration is underway in [`rust/`](rust/). It now includes a
 low-overhead Win32 avatar and popover preview wired to local search, streamed
 Ollama chat, the watcher, idle unload, and explicit CMD approval. The Python
-0.6.8 app remains the supported desktop release while the Rust UI is tested on
+0.6.14 app remains the supported desktop release while the Rust UI is tested on
 Windows and measured for startup, responsiveness, and memory use. See
 [`rust/README.md`](rust/README.md) for build notes and remaining parity checks.
 
@@ -47,6 +47,16 @@ Start FileBot hidden in the signed-in desktop session with:
 
 For startup diagnostics, run `.\scripts\start.ps1 -Console`. FileBot also writes rotating logs to `~/.filebot/logs/filebot.log`, including request duration, time-to-first-token, wake initialization, and Windows working-set snapshots. Prompts and model text are not included in these metrics. Keep FileBot in the signed-in desktop session so the avatar and global hotkey can receive input.
 
+Right-click the avatar and choose **Quit FileBot** before closing the source
+folder or updating its files. For a source-checkout upgrade, use a clean `main`
+checkout and run `git pull --ff-only origin main`, then rerun
+`.\scripts\setup.ps1`. Setup reuses a compatible Python 3.11/3.12 virtual
+environment and updates its dependencies. The SQLite index, command audit,
+and logs stay under `~/.filebot`; the embedding model stays in its configured
+cache. Back up any customized `config/settings.yaml` before updating. FileBot
+currently uses a source-based setup; a signed installer and automated installer
+upgrade remain release gates.
+
 ## Search and indexing
 
 Watchdog records debounced file changes in SQLite using one bounded-memory debounce thread. It does not load an embedding model. Wake-up loads retrieval resources on a background thread and starts an indexing service that processes queued updates in bounded batches while awake. Failed files remain queued with exponential retry backoff (five seconds up to one hour); a new change makes them eligible immediately, so one corrupt document cannot starve later files. Search and indexing share a lock so vector and lexical state cannot be changed during a query. Dense FastEmbed/ChromaDB results and BM25 results are combined using reciprocal rank fusion. Plain text, Markdown, PDF, and DOCX are parsed into bounded chunks. Search, model calls, and approved CMD runs stay off the Qt event loop. Searches are local after first-time package/model downloads.
@@ -67,7 +77,10 @@ Treat policy edits as security-sensitive. Keep installer, privilege, shell chain
 python -m unittest discover -s tests -v
 ```
 
-The Windows GitHub Actions workflow runs the unit suite on Python 3.11 and 3.12, including Qt lifecycle tests. It installs only the test-time YAML, watchdog, and PyQt6 dependencies; the local model and vector database are not needed for these unit tests.
+The Windows GitHub Actions workflow runs unit and desktop acceptance tests on
+Python 3.11 and 3.12. Separate jobs install production requirements and check
+lazy startup and Chroma shutdown. Tests use local fixtures and do not require a
+personal corpus or a live Ollama server.
 
 ## Data and privacy
 
@@ -75,4 +88,4 @@ The file index, audit log, vectors, and Nanobot workspace stay on this machine. 
 
 ## Current scope
 
-The current release supports the sleep/wake shell, local indexing and hybrid retrieval, compact UI, and gated command flow. Supported document formats are text, Markdown, PDF, and DOCX. Source-code-aware parsing and an installer package are not included yet.
+The current release supports the sleep/wake shell, local indexing and hybrid retrieval, compact UI, and gated command flow. Supported document formats are text, Markdown, PDF, and DOCX; configured source extensions use Tree-sitter chunks when their grammars are cached. A signed installer package is not included yet.

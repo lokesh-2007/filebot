@@ -57,6 +57,7 @@ def main() -> int:
             )
         lifecycle = LifecycleManager(settings, db, root)
         avatar = AvatarBubble()
+        avatar.quit_requested.connect(app.quit)
         watcher = FileWatcher(settings, db)
         bridge = HotkeyBridge(settings["runtime"].get("hotkey", "<ctrl>+<alt>+<space>"))
         avatar.toggled.connect(lifecycle.toggle)
