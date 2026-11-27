@@ -245,6 +245,42 @@ class FileOpsTool:
             listing += f"\n{skipped_links} link(s) outside configured folders hidden."
         return f"Folder: {str(folder)[:1024]}\n{listing}"
 
+    def open_directory(self, path: str) -> str:
+        """Open a named or absolute folder only when it is inside configured roots."""
+        if self.roots is None or not self.roots:
+            raise PermissionError("Folder opening requires configured FileBot roots")
+        requested = path.strip().strip('"').strip("'")
+        if not requested or "\x00" in requested:
+            raise ValueError("Provide a valid folder path")
+        candidate = Path(requested).expanduser()
+        folder: Path | None = None
+        if candidate.is_absolute():
+            folder = candidate.resolve(strict=True)
+        else:
+            root_match = next(
+                (root for root in self.roots if root.name.casefold() == requested.casefold()),
+                None,
+            )
+            if root_match is not None:
+                folder = root_match.resolve(strict=True)
+            else:
+                for root in self.roots:
+                    try:
+                        possible = (root / candidate).resolve(strict=True)
+                        if possible.is_dir():
+                            folder = possible
+                            break
+                    except (OSError, RuntimeError):
+                        continue
+        if folder is None or not folder.is_dir():
+            raise FileNotFoundError(f"No configured folder matches '{requested}'")
+        if not path_is_within_roots(folder, self.roots):
+            raise PermissionError("Folder is outside FileBot's configured roots")
+        if os.name != "nt":
+            raise OSError("Opening a folder in Explorer is available only on Windows")
+        os.startfile(str(folder))  # type: ignore[attr-defined]
+        return str(folder)
+
 
 def _move_file_to_recycle_bin(file: Path) -> None:
     """Use the Windows shell undo path, with no permanent-delete fallback."""

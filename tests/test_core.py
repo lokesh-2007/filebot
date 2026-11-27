@@ -540,6 +540,46 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn(str((self.root / "Reports").resolve()), answer)
         check_ollama.assert_not_called()
 
+    def test_open_downloads_folder_is_direct_and_skips_model_context(self) -> None:
+        downloads = self.root / "Downloads"
+        downloads.mkdir()
+
+        class FakeEngine:
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("Opening a folder must not build retrieval context")
+
+        runtime = BotRuntime({"index": {"roots": [str(downloads)]}}, self.db, FakeEngine())
+        with patch("agent.tools.file_ops_tool.os.startfile") as open_folder, patch.object(
+            runtime, "_check_ollama_ready",
+        ) as check_ollama:
+            answer = runtime.ask_streaming("open downloads folder", lambda _delta: None)
+
+        self.assertEqual(answer, f"Opened folder: {downloads.resolve()}")
+        open_folder.assert_called_once_with(str(downloads.resolve()))
+        check_ollama.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows OneDrive Documents redirection")
+    def test_open_named_folder_inside_onedrive_uses_redirected_documents_root(self) -> None:
+        onedrive = self.root / "OneDrive"
+        project = onedrive / "Documents" / "ChatGPT"
+        project.mkdir(parents=True)
+
+        class FakeEngine:
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("Opening a folder must not build retrieval context")
+
+        runtime = BotRuntime({"index": {"roots": ["~/Documents"]}}, self.db, FakeEngine())
+        with patch.dict(os.environ, {"OneDrive": str(onedrive)}), patch(
+            "agent.tools.file_ops_tool.os.startfile",
+        ) as open_folder, patch.object(runtime, "_check_ollama_ready") as check_ollama:
+            answer = runtime.ask_streaming(
+                "open the chatgpt folder inside onedrive", lambda _delta: None,
+            )
+
+        self.assertEqual(answer, f"Opened folder: {project.resolve()}")
+        open_folder.assert_called_once_with(str(project.resolve()))
+        check_ollama.assert_not_called()
+
     def test_find_prompt_returns_local_results_without_starting_the_model(self) -> None:
         plan_path = self.root / "plan.txt"
         class FakeEngine:

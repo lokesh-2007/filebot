@@ -7,6 +7,7 @@ app:
 index:
   roots:
     - "~/Documents"
+    - "~/Downloads"
   include_extensions:
     - .txt
     - .md

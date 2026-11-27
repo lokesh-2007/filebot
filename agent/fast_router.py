@@ -29,12 +29,17 @@ class FastRouter:
     )
     _action_question = re.compile(
         r"^\s*(?:how|why|when|what|should\s+i|can\s+i)\b.*"
-        r"\b(?:delete|remove|trash|create|make|write|save)\b",
+        r"\b(?:delete|remove|trash|create|make|write|save|open|browse)\b",
         re.I,
     )
     _open_file = re.compile(
-        r"\b(?:open|view|show)\b.{0,48}\b(?:file|document|pdf|docx|folder|notes?)\b"
+        r"\b(?:open|view|show)\b.{0,48}\b(?:file|document|pdf|docx|notes?)\b"
         r"|\b(?:open|view)\s+[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
+        re.I,
+    )
+    _open_folder = re.compile(
+        r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\b"
+        r".{0,100}\b(?:folder|directory)\b",
         re.I,
     )
     _read_file = re.compile(
@@ -97,6 +102,30 @@ class FastRouter:
             return None
         target = match.group("path").strip().strip('"').strip("'").rstrip(".,;?!")
         target = re.sub(r"^(?:files|contents)\s+(?:in|of)\s+", "", target, flags=re.I)
+        target = re.sub(r"\s+(?:folder|directory)$", "", target, flags=re.I)
+        return target or None
+
+    def folder_target(self, prompt: str) -> str | None:
+        """Extract an explicit folder name/path from a direct open-folder request."""
+        inside = re.search(
+            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+            r"(?:(?:me|the|my)\s+)*(?P<path>.+?)\s+(?:folder|directory)\s+"
+            r"(?:inside|in)\s+(?:my\s+)?(?:onedrive|documents|downloads|desktop)\s*[?.!]*$",
+            prompt.strip(), re.I,
+        )
+        if inside is not None:
+            target = inside.group("path").strip().strip('"').strip("'")
+            target = re.sub(r"^(?:the|my)\s+", "", target, flags=re.I)
+            return target or None
+        match = re.search(
+            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+            r"(?:(?:me|the|my)\s+)*(?P<path>.+?)\s+(?:folder|directory)\s*[?.!]*$",
+            prompt.strip(), re.I,
+        )
+        if match is None:
+            return None
+        target = match.group("path").strip().strip('"').strip("'")
+        target = re.sub(r"^(?:the|my)\s+", "", target, flags=re.I)
         return target or None
 
     def is_summary_request(self, prompt: str) -> bool:
@@ -115,6 +144,8 @@ class FastRouter:
             return "delete"
         if self._create_file.search(prompt) and not self._action_question.search(prompt):
             return "create"
+        if self._open_folder.search(prompt) and not self._action_question.search(prompt):
+            return "open_folder"
         if self._search.search(prompt):
             return "search"
         if self._read_file.search(prompt):

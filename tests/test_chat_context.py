@@ -5,6 +5,7 @@ import unittest
 import tempfile
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.bot_runtime import BotRuntime
@@ -24,6 +25,50 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(router.route("Run `whoami`"), "cmd")
         self.assertEqual(router.route("Run the tests"), "cmd")
         self.assertEqual(router.route("Find and run a command"), "cmd")
+
+    def test_open_folder_request_routes_directly_without_chat_retrieval(self) -> None:
+        router = FastRouter()
+
+        self.assertEqual(router.route("open downloads folder"), "open_folder")
+        self.assertEqual(router.folder_target("open downloads folder"), "downloads")
+        self.assertEqual(
+            router.route("open the chatgpt folder inside onedrive"), "open_folder",
+        )
+        self.assertEqual(
+            router.folder_target("open the chatgpt folder inside onedrive"), "chatgpt",
+        )
+        self.assertEqual(router.route("How do I open the Downloads folder?"), "chat")
+        self.assertEqual(router.route("What's in the Downloads folder?"), "list")
+        self.assertEqual(router.list_target("What's in the Downloads folder?"), "Downloads")
+
+    def test_context_overflow_retries_once_in_a_fresh_session(self) -> None:
+        runtime = BotRuntime({}, object(), object())
+        calls: list[str] = []
+
+        runtime.bot = SimpleNamespace(_loop=object())
+
+        def run_fake_agent(_intent, coroutine):
+            coroutine.close()
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    content="", error="Model input exceeds the local context budget: 9000/2800",
+                )
+            return SimpleNamespace(content="Opened the folder.", error=None)
+
+        def make_request():
+            calls.append(runtime._session)
+            async def request():
+                return None
+            return request()
+
+        with patch.object(runtime, "_run_agent", side_effect=run_fake_agent):
+            answer = runtime._run_agent_with_context_recovery(
+                "chat", make_request,
+            )
+
+        self.assertEqual(answer, "Opened the folder.")
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0], calls[1])
 
     def test_retrieved_prompt_context_is_bounded_and_keeps_source_paths(self) -> None:
         hits = [

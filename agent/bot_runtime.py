@@ -11,7 +11,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from uuid import uuid4
 
 from agent.fast_router import FastRouter
 from agent.ollama_tool_bridge import install_ollama_tool_bridge
@@ -113,7 +114,10 @@ class BotRuntime:
         self.indexer = IndexWorker(settings, db, engine)
         self.bot = None
         self._model_used = False
-        self._session = "filebot:desktop"
+        # Start a fresh model transcript for each awake runtime. The visible
+        # desktop transcript remains persistent in SQLite; stale model tool
+        # history must not make short new requests exceed a small local context.
+        self._session = f"filebot:desktop:{uuid4().hex[:12]}"
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._loop_started = threading.Event()
@@ -522,6 +526,32 @@ class BotRuntime:
             finally:
                 loop.tools = original_tools
 
+    def _run_agent_with_context_recovery(
+        self, intent: str, make_request: Callable[[], Any],
+    ) -> str:
+        """Retry once in a clean model session when old history fills its context."""
+        for attempt in range(2):
+            try:
+                return self._answer_text(self._run_agent(intent, make_request()))
+            except RuntimeError as exc:
+                if attempt or "exceeds the local context budget" not in str(exc).casefold():
+                    raise
+                previous_session = self._session
+                self._session = f"filebot:desktop:{uuid4().hex[:12]}"
+                log.warning(
+                    "Resetting the model conversation after context overflow; retrying the current request"
+                )
+                agent_loop = getattr(self.bot, "_loop", None)
+                discard = getattr(agent_loop, "discard_session", None)
+                if callable(discard):
+                    try:
+                        self._run_async(
+                            discard(previous_session), timeout=min(15, self._request_timeout_seconds),
+                        )
+                    except Exception:
+                        log.exception("Could not discard oversized model conversation")
+        raise RuntimeError("FileBot could not recover from a full model context")
+
     @staticmethod
     def _answer_text(result: Any) -> str:
         """Validate a completed Nanobot result and return safe display text."""
@@ -616,6 +646,18 @@ class BotRuntime:
             return file_ops.list_directory(target)
         except (OSError, RuntimeError, ValueError, PermissionError) as exc:
             return f"I couldn't list that configured folder: {exc}"
+
+    def _open_explicit_folder(self, prompt: str) -> str:
+        """Open an exact configured folder directly without adding model context."""
+        target = self.router.folder_target(prompt)
+        if target is None:
+            return "Tell me the name of the configured folder you want to open."
+        file_ops = FileOpsTool(self.db, roots=self.settings.get("index", {}).get("roots"))
+        try:
+            path = file_ops.open_directory(target)
+            return f"Opened folder: {path}"
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return f"I couldn't open that configured folder: {exc}"
 
     def _stage_explicit_delete(self, prompt: str) -> str:
         """Stage one unambiguous exact file for a one-time confirmation token."""
@@ -731,6 +773,8 @@ class BotRuntime:
             return self._cancel_explicit_delete(prompt)
         if intent == "search":
             return self.search(prompt)
+        if intent == "open_folder":
+            return self._open_explicit_folder(prompt)
         summary_content: str | None = None
         if intent == "open":
             result = self._open_explicit_target(prompt)
@@ -755,10 +799,10 @@ class BotRuntime:
         # A failed HTTP request may still have loaded Ollama's model. Always
         # request idle unload when this awake session is closed.
         self._model_used = True
-        result = self._run_agent(
-            intent, self.bot.run(prompt, session_key=self._session, channel="filebot")
+        return self._run_agent_with_context_recovery(
+            intent,
+            lambda: self.bot.run(prompt, session_key=self._session, channel="filebot"),
         )
-        return self._answer_text(result)
 
     def ask_streaming(self, prompt: str, on_delta: Any) -> str | list[dict[str, Any]]:
         """Stream a conversational answer grounded in relevant indexed files."""
@@ -771,6 +815,8 @@ class BotRuntime:
             return self._cancel_explicit_delete(prompt)
         if intent == "search":
             return self.search(prompt)
+        if intent == "open_folder":
+            return self._open_explicit_folder(prompt)
         summary_content: str | None = None
         if intent == "open":
             result = self._open_explicit_target(prompt)
@@ -810,7 +856,7 @@ class BotRuntime:
                     result = getattr(event, "result", None)
             return result
 
-        return self._answer_text(self._run_agent(intent, collect()))
+        return self._run_agent_with_context_recovery(intent, collect)
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return indexed matches immediately; queue draining stays in background."""

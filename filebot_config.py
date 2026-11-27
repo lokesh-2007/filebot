@@ -123,7 +123,18 @@ def expand_config_path(value: str | Path) -> Path:
     expanded = os.path.expandvars(os.path.expanduser(str(value)))
     if not expanded.strip():
         raise ValueError("Configured path cannot be empty")
-    return Path(expanded)
+    path = Path(expanded)
+    # Windows often redirects the known Documents folder into OneDrive while
+    # keeping ``%USERPROFILE%\\Documents`` as a separate legacy directory.
+    # Honor the configured ~/Documents root through that redirection when it
+    # exists, so FileBot opens and indexes the folder Windows actually uses.
+    normalized = str(value).replace("\\", "/").casefold()
+    one_drive = os.environ.get("OneDrive") or os.environ.get("OneDriveCommercial")
+    if os.name == "nt" and normalized == "~/documents" and one_drive:
+        redirected = Path(one_drive) / "Documents"
+        if redirected.is_dir():
+            return redirected
+    return path
 
 
 def path_is_within_roots(path: str | Path, roots: list[str | Path]) -> bool:

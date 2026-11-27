@@ -91,6 +91,19 @@ class FileOpsTests(unittest.TestCase):
             with self.assertRaisesRegex(PermissionError, "outside FileBot"):
                 tool.list_directory(str(outside))
 
+    def test_open_directory_resolves_named_child_inside_configured_root(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            documents = Path(directory) / "Documents"
+            project = documents / "ChatGPT"
+            project.mkdir(parents=True)
+            tool = FileOpsTool(db=None, roots=[str(documents)])
+
+            with patch("agent.tools.file_ops_tool.os.startfile") as startfile:
+                result = tool.open_directory("ChatGPT")
+
+            self.assertEqual(result, str(project.resolve()))
+            startfile.assert_called_once_with(str(project.resolve()))
+
     def test_reads_bounded_content_only_from_indexed_files_inside_roots(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             base = Path(directory)

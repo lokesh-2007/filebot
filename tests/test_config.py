@@ -25,6 +25,15 @@ class ConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"FILEBOT_TEST_ROOT": str(ROOT)}):
             self.assertEqual(expand_config_path("%FILEBOT_TEST_ROOT%/data"), ROOT / "data")
 
+    @unittest.skipUnless(os.name == "nt", "Windows known-folder redirection")
+    def test_documents_root_follows_onedrive_redirect(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            onedrive = Path(directory)
+            redirected = onedrive / "Documents"
+            redirected.mkdir()
+            with patch.dict(os.environ, {"OneDrive": str(onedrive)}):
+                self.assertEqual(expand_config_path("~/Documents"), redirected)
+
     def test_invalid_ollama_autostart_settings_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             path = Path(directory) / "settings.yaml"
