@@ -112,6 +112,10 @@ class LifecycleTests(unittest.TestCase):
         class SlowRuntime:
             def __init__(self) -> None:
                 self.release = threading.Event()
+                self.reset_called = False
+
+            def reset_cancellation(self) -> None:
+                self.reset_called = True
 
             def ask(self, prompt: str) -> str:
                 self.release.wait(timeout=2)
@@ -121,7 +125,8 @@ class LifecycleTests(unittest.TestCase):
         card = PopoverCard(engine=None, runtime=runtime, db=FakeDatabase())
         card.input.setText("hello")
         card.submit()
-        self.assertIn("Waiting for the local model", card.answer.toPlainText())
+        self.assertTrue(runtime.reset_called)
+        self.assertIn("Starting the local model request", card.answer.toPlainText())
         self.assertFalse(card.input.isEnabled())
         runtime.release.set()
         deadline = time.monotonic() + 2
@@ -175,7 +180,7 @@ class LifecycleTests(unittest.TestCase):
         card._show_wait_feedback()
 
         self.assertIn("10 seconds", card.answer.toPlainText())
-        self.assertIn("Ollama loads the model", card.answer.toPlainText())
+        self.assertIn("Check that Ollama is running", card.answer.toPlainText())
         card.close()
 
     def test_chat_can_be_cancelled_without_blocking_the_popover(self) -> None:

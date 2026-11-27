@@ -1,5 +1,16 @@
 # Changelog
 
+## Bounded and cancellable chat requests 0.6.8 — 2026-11-27
+
+- Make Stop cancel Ollama preflight and server-start waiting as well as an
+  active Nanobot turn.
+- Add a configurable 15–600 second request deadline (180 seconds by default);
+  timed-out turns are cancelled and return a clear recovery message.
+- Shorten the local Ollama model-list probe timeout and clarify elapsed-wait UI
+  feedback so chat does not appear idle or wait forever.
+- Verify timeout configuration, preflight cancellation, coroutine cancellation,
+  and popover Stop behavior with focused tests.
+
 ## Responsive local assistant improvements 0.6.7 — 2026-11-25
 
 - Add an in-app glossary editor with add/remove controls and transactional

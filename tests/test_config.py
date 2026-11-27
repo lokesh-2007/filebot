@@ -77,6 +77,15 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "max_docx_uncompressed_bytes.*integer"):
                 load_settings(path)
 
+    def test_request_timeout_must_be_bounded(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["runtime"]["request_timeout_seconds"] = 601
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "request_timeout_seconds.*600"):
+                load_settings(path)
+
 
 if __name__ == "__main__":
     unittest.main()

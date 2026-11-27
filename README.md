@@ -1,4 +1,4 @@
-# FileBot 0.6.7
+# FileBot 0.6.8
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
 
@@ -11,7 +11,7 @@ See [ROADMAP.md](ROADMAP.md) for the attached architecture plan's implemented fe
 The native Rust migration is underway in [`rust/`](rust/). It now includes a
 low-overhead Win32 avatar and popover preview wired to local search, streamed
 Ollama chat, the watcher, idle unload, and explicit CMD approval. The Python
-0.6.7 app remains the supported desktop release while the Rust UI is tested on
+0.6.8 app remains the supported desktop release while the Rust UI is tested on
 Windows and measured for startup, responsiveness, and memory use. See
 [`rust/README.md`](rust/README.md) for build notes and remaining parity checks.
 
@@ -35,7 +35,7 @@ ollama pull qwen2.5-coder:3b
 
 The FastEmbed embedding model is downloaded on the first wake into the cache directory in `config/settings.yaml`. Setup attempts to cache the configured Tree-sitter grammars; if GitHub is unavailable, setup warns and source indexing uses bounded text chunks until the grammars are cached. Indexing and wake never download grammars. ChromaDB data, the SQLite database, rotating logs, and Nanobot state are stored under `~/.filebot` by default. Configured paths support `~`, `%VARIABLE%`, and `$VARIABLE` expansion.
 
-Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, and `keep_alive`. Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
+Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, `keep_alive`, and `runtime.request_timeout_seconds` (180 seconds by default). Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The **Stop** button cancels the model preflight, Ollama startup wait, or chat request. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
 
 The **Search** button and obvious natural-language file searches (such as “find meeting notes”) query the local index directly; explicit requests such as “open Lab3.pdf” also bypass Ollama and safely open an exact indexed file. Duplicate filenames are shown as choices. **Ask** starts the Ollama server on demand on Windows by default (`models.ollama.auto_start: true`) and waits up to `startup_timeout_seconds` (30 by default). Use **Stop** to cancel a model request that is taking too long. If Ollama cannot be found, start it from the Start menu. If the configured model is missing, run `ollama pull qwen2.5-coder:3b` (or pull the model name you set in `settings.yaml`). Ollama is only checked for model-backed requests.
 

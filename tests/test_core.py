@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import call, patch
 
 from agent.fast_router import FastRouter
-from agent.bot_runtime import BotRuntime, _ensure_filebot_instructions
+from agent.bot_runtime import BotRuntime, _ensure_filebot_instructions, _nanobot_config_payload
 from executor.cmd_runner import CommandRunner, _read_output_tail
 from executor.policy_engine import PolicyEngine
 from retrieval.index_worker import IndexQueueService, IndexWorker
@@ -297,6 +297,66 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(bot.loops), 3)
         self.assertTrue(all(loop is bot.loops[0] for loop in bot.loops))
 
+    def test_nanobot_receives_configured_local_output_and_context_limits(self) -> None:
+        payload = _nanobot_config_payload(
+            {"models": {"ollama": {"num_predict": 192, "num_ctx": 3072}}},
+            Path("C:/filebot/workspace"), "qwen2.5-coder:3b", "http://127.0.0.1:11434/v1",
+        )
+        defaults = payload["agents"]["defaults"]
+        self.assertEqual(defaults["max_tokens"], 192)
+        self.assertEqual(defaults["context_window_tokens"], 3072)
+
+    def test_bot_runtime_request_timeout_cancels_the_pending_coroutine(self) -> None:
+        class Loop:
+            def is_running(self):
+                return True
+
+        class Future:
+            cancelled = False
+            timeout = None
+
+            def result(self, *, timeout):
+                self.timeout = timeout
+                raise TimeoutError()
+
+            def cancel(self):
+                self.cancelled = True
+                return True
+
+        runtime = BotRuntime({"index": {}, "runtime": {"request_timeout_seconds": 45}}, self.db, None)
+        future = Future()
+        runtime._async_loop = Loop()
+        with patch("agent.bot_runtime.asyncio.run_coroutine_threadsafe", return_value=future):
+            with self.assertRaisesRegex(RuntimeError, "did not respond within 45 seconds"):
+                runtime._run_async(object(), timeout=45)
+        self.assertEqual(future.timeout, 45)
+        self.assertTrue(future.cancelled)
+        self.assertIsNone(runtime._active_future)
+
+    def test_stop_cancels_preflight_before_starting_ollama_checks(self) -> None:
+        runtime = BotRuntime({"index": {}, "models": {"ollama": {"base_url": "http://127.0.0.1:11434"}}},
+                             self.db, None)
+        runtime.cancel_pending()
+        with patch.object(runtime, "_ollama_tags") as tags:
+            with self.assertRaisesRegex(RuntimeError, "request was cancelled"):
+                runtime._check_ollama_ready()
+        tags.assert_not_called()
+
+    def test_stop_during_ollama_probe_does_not_autostart_server(self) -> None:
+        runtime = BotRuntime({"index": {}, "models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "auto_start": True,
+        }}}, self.db, None)
+
+        def cancel_while_probing(_base_url):
+            runtime.cancel_pending()
+            raise OSError("probe interrupted")
+
+        with patch.object(runtime, "_ollama_tags", side_effect=cancel_while_probing), \
+                patch.object(runtime, "_start_ollama") as start:
+            with self.assertRaisesRegex(RuntimeError, "request was cancelled"):
+                runtime._check_ollama_ready()
+        start.assert_not_called()
+
     def test_plain_chat_does_not_wait_for_background_file_indexing(self) -> None:
         class FakeBot:
             async def run(self, prompt, **kwargs):
@@ -426,7 +486,7 @@ class DatabaseTests(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=response) as request:
             runtime._check_ollama_ready()
 
-        request.assert_called_once_with("http://127.0.0.1:11434/api/tags", timeout=4)
+        request.assert_called_once_with("http://127.0.0.1:11434/api/tags", timeout=2)
 
     def test_ollama_preflight_explains_missing_model_and_service(self) -> None:
         runtime = BotRuntime({"models": {"ollama": {

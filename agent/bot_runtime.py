@@ -49,6 +49,26 @@ def _ensure_filebot_instructions(workspace: Path) -> None:
         pass
 
 
+def _nanobot_config_payload(settings: dict[str, Any], workspace: Path,
+                            model: str, base_url: str) -> dict[str, Any]:
+    """Build Nanobot settings using FileBot's configured local model limits."""
+    ollama = settings.get("models", {}).get("ollama", {})
+    return {
+        "agents": {"defaults": {
+            "workspace": str(workspace), "model": model, "provider": "ollama",
+            "max_tokens": max(1, int(ollama.get("num_predict", 256))),
+            "context_window_tokens": max(256, int(ollama.get("num_ctx", 4096))),
+            "max_tool_iterations": 5, "max_concurrent_subagents": 1,
+            "disabled_skills": ["*"],
+        }},
+        "providers": {"ollama": {"api_base": base_url}},
+        "tools": {"exec": {"enable": False}, "file": {"enable": False},
+                  "web": {"enable": False}, "cli_apps": {"enable": False},
+                  "my": {"enable": False}, "mcp_servers": {},
+                  "restrict_to_workspace": True},
+    }
+
+
 def _is_unexecuted_tool_text(content: str) -> bool:
     """Detect model text that imitates a tool invocation instead of using one."""
     value = content.strip()
@@ -82,6 +102,10 @@ class BotRuntime:
         self._loop_started = threading.Event()
         self._future_lock = threading.Lock()
         self._active_future: Future[Any] | None = None
+        self._cancel_event = threading.Event()
+        self._request_timeout_seconds = min(600, max(
+            15, int(settings.get("runtime", {}).get("request_timeout_seconds", 180)),
+        ))
         self._turn_lock = threading.Lock()
         self._tool_registries: dict[str, Any] = {}
         self._ollama_process: subprocess.Popen[bytes] | None = None
@@ -107,7 +131,7 @@ class BotRuntime:
             self._stop_async_loop()
             raise RuntimeError("Nanobot event loop did not start")
 
-    def _run_async(self, coroutine: Any) -> Any:
+    def _run_async(self, coroutine: Any, *, timeout: float | None = None) -> Any:
         """Run a coroutine on Nanobot's persistent loop from a UI worker thread."""
         loop = self._async_loop
         if loop is None or not loop.is_running():
@@ -116,17 +140,38 @@ class BotRuntime:
         with self._future_lock:
             self._active_future = future
         try:
-            return future.result()
+            return future.result(timeout=timeout)
+        except TimeoutError as exc:
+            future.cancel()
+            raise RuntimeError(
+                f"The local model did not respond within {int(timeout or 0)} seconds. "
+                "Check Ollama and try again."
+            ) from exc
+        except Exception as exc:
+            if self._cancel_event.is_set():
+                raise RuntimeError("The local model request was cancelled.") from exc
+            raise
         finally:
             with self._future_lock:
                 if self._active_future is future:
                     self._active_future = None
 
     def cancel_pending(self) -> bool:
-        """Cancel the active Nanobot turn during an orderly app shutdown."""
+        """Cancel preflight/startup work or an active Nanobot turn."""
+        self._cancel_event.set()
         with self._future_lock:
             future = self._active_future
-        return bool(future is not None and not future.done() and future.cancel())
+        cancelled = bool(future is not None and not future.done() and future.cancel())
+        return cancelled or future is None or future.done()
+
+    def reset_cancellation(self) -> None:
+        """Prepare a new UI request before its worker thread is started."""
+        self._cancel_event.clear()
+
+    def _raise_if_cancelled(self) -> None:
+        """Abort between blocking setup steps after a user presses Stop."""
+        if self._cancel_event.is_set():
+            raise RuntimeError("The local model request was cancelled.")
 
     def _stop_async_loop(self) -> None:
         """Stop and close Nanobot's event loop after its resources are released."""
@@ -164,16 +209,7 @@ class BotRuntime:
         _ensure_filebot_instructions(workspace)
         model = str(settings["models"]["ollama"]["model"])
         base_url = str(settings["models"]["ollama"].get("api_base", settings["models"]["ollama"]["base_url"]))
-        config = Config.model_validate({
-            "agents": {"defaults": {"workspace": str(workspace), "model": model, "provider": "ollama",
-                                     "max_tool_iterations": 5, "max_concurrent_subagents": 1,
-                                     "disabled_skills": ["*"]}},
-            "providers": {"ollama": {"api_base": base_url}},
-            "tools": {"exec": {"enable": False}, "file": {"enable": False},
-                      "web": {"enable": False}, "cli_apps": {"enable": False},
-                      "my": {"enable": False},
-                      "mcp_servers": {}, "restrict_to_workspace": True},
-        })
+        config = Config.model_validate(_nanobot_config_payload(settings, workspace, model, base_url))
         # Give Nanobot an instance-local config/data root so sessions, logs, and
         # auxiliary state never fall back to ~/.nanobot.
         nanobot_config = data_dir / "nanobot" / "config.json"
@@ -246,10 +282,13 @@ class BotRuntime:
 
     def _prepare_prompt(self, prompt: str) -> tuple[str, str]:
         """Apply local routing and add only the context needed for one turn."""
+        self._raise_if_cancelled()
         intent = self.router.route(prompt)
         if intent != "search" and isinstance(self.settings.get("models"), dict):
             self._check_ollama_ready()
+        self._raise_if_cancelled()
         self._activate()
+        self._raise_if_cancelled()
         assert self.bot is not None
         if intent == "cmd":
             prompt = ("The user is asking for a Windows CMD action. Never execute commands or use any shell. "
@@ -266,9 +305,11 @@ class BotRuntime:
         ollama = self.settings.get("models", {}).get("ollama", {})
         base_url = str(ollama.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
         model = str(ollama.get("model", "qwen2.5-coder:3b"))
+        self._raise_if_cancelled()
         try:
             payload = self._ollama_tags(base_url)
         except (OSError, ValueError, UnicodeDecodeError) as first_error:
+            self._raise_if_cancelled()
             if not ollama.get("auto_start", False):
                 raise RuntimeError(
                     f"FileBot cannot reach Ollama at {base_url}. Start Ollama and try again. "
@@ -279,6 +320,7 @@ class BotRuntime:
             deadline = time.monotonic() + timeout
             last_error: Exception = first_error
             while time.monotonic() < deadline:
+                self._raise_if_cancelled()
                 if self._ollama_process is not None and self._ollama_process.poll() is not None:
                     raise RuntimeError(
                         "Ollama exited while FileBot was waiting for its local server. "
@@ -289,13 +331,14 @@ class BotRuntime:
                     break
                 except (OSError, ValueError, UnicodeDecodeError) as exc:
                     last_error = exc
-                    time.sleep(0.25)
+                    self._cancel_event.wait(0.25)
             else:
                 raise RuntimeError(
                     f"Ollama did not become ready at {base_url} within {timeout} seconds. "
                     "Open Ollama from the Start menu and try again. "
                     f"Details: {last_error}"
                 ) from last_error
+        self._raise_if_cancelled()
         installed = {
             str(item.get("name") or item.get("model"))
             for item in payload["models"] if isinstance(item, dict)
@@ -311,7 +354,7 @@ class BotRuntime:
         """Fetch a bounded model list from the local Ollama HTTP endpoint."""
         from urllib.request import urlopen
 
-        with urlopen(f"{base_url}/api/tags", timeout=4) as response:
+        with urlopen(f"{base_url}/api/tags", timeout=2) as response:
             payload = json.loads(response.read(1_000_001).decode("utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
             raise RuntimeError("Ollama returned an invalid model list.")
@@ -351,11 +394,11 @@ class BotRuntime:
             loop = getattr(self.bot, "_loop", None)
             scoped_tools = self._tool_registries.get(intent)
             if loop is None or scoped_tools is None or not hasattr(loop, "tools"):
-                return self._run_async(coroutine)
+                return self._run_async(coroutine, timeout=self._request_timeout_seconds)
             original_tools = loop.tools
             loop.tools = scoped_tools
             try:
-                return self._run_async(coroutine)
+                return self._run_async(coroutine, timeout=self._request_timeout_seconds)
             finally:
                 loop.tools = original_tools
 
@@ -466,7 +509,7 @@ class BotRuntime:
         try:
             if self.bot is not None:
                 try:
-                    self._run_async(self.bot.aclose())
+                    self._run_async(self.bot.aclose(), timeout=10)
                 except Exception:
                     log.exception("Could not close Nanobot runtime cleanly")
             self.bot = None

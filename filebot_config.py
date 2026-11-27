@@ -61,6 +61,12 @@ def load_settings(path: str | Path) -> dict[str, Any]:
     )
     if source_timeout > 5_000:
         raise RuntimeError("FileBot setting 'index.source_parse_timeout_ms' must be at most 5000")
+    request_timeout = _validate_number(
+        settings["runtime"].get("request_timeout_seconds", 180),
+        "runtime.request_timeout_seconds", minimum=15, integer=True,
+    )
+    if request_timeout > 600:
+        raise RuntimeError("FileBot setting 'runtime.request_timeout_seconds' must be at most 600")
     chunk_chars = _validate_number(index.get("chunk_chars", 1200), "index.chunk_chars", minimum=100, integer=True)
     overlap = _validate_number(index.get("chunk_overlap", 150), "index.chunk_overlap", minimum=0, integer=True)
     if overlap >= chunk_chars:

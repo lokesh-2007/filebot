@@ -13,7 +13,8 @@ still being validated.
 - Wake shows a loading popover immediately while retrieval initialization runs
   off the GUI thread; controls activate when the same card becomes ready.
 - An in-flight local model request can be cancelled from the popover without
-  blocking Qt's UI thread.
+  blocking Qt's UI thread; cancellation covers Ollama preflight/startup and a
+  configured deadline bounds a stalled model turn.
 - Retrieval and Nanobot initialize on wake; Ollama starts on demand for model
   requests and unloads according to the configured keep-alive/lifecycle policy.
 - Background queue indexing runs in Windows background CPU and I/O priority,

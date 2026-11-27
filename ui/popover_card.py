@@ -256,9 +256,12 @@ class PopoverCard(QWidget):
         self.status_changed.emit("active")
         self.answer.setPlainText(
             "Searching indexed files…" if force_search
-            else "Waiting for the local model… The first response can take up to a minute while it loads."
+            else "Starting the local model request… It can take a little while on first use. Press Stop to cancel."
         )
         self.work_started.emit()
+        reset_cancellation = getattr(self.runtime, "reset_cancellation", None)
+        if callable(reset_cancellation):
+            reset_cancellation()
         self._task = _Task(self.runtime, prompt, force_search)
         self._task.done.connect(self._received)
         self._task.delta.connect(self._received_delta)
@@ -286,8 +289,8 @@ class PopoverCard(QWidget):
         """Show elapsed time while waiting for the first streamed model token."""
         self._request_elapsed_seconds += self._request_timer.interval() // 1000
         self.answer.setPlainText(
-            f"Still waiting for the local model ({self._request_elapsed_seconds} seconds)… "
-            "FileBot is working; the first answer can be slow while Ollama loads the model."
+            f"Waiting for the local model ({self._request_elapsed_seconds} seconds)… "
+            "Check that Ollama is running. Press Stop to cancel this request."
         )
 
     def _received(self, result: object, error: str) -> None:
