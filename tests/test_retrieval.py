@@ -28,6 +28,25 @@ class ReciprocalRankFusionTests(unittest.TestCase):
         self.assertEqual([item["path"] for item in results], ["a.txt", "b.txt", "c.txt"])
         self.assertGreater(results[0]["score"], results[2]["score"])
 
+    def test_sqlite_lexical_search_survives_missing_embedding_runtime(self) -> None:
+        row = {"chunk_id": "warranty", "path": "warranty.txt", "file_name": "warranty.txt",
+               "snippet": "The warranty lasts two years.", "page_or_line": None,
+               "heading": None}
+
+        class FakeDatabase:
+            def search_lexical(self, query, _limit):
+                self.query = query
+                return [row]
+
+        database = FakeDatabase()
+        engine = HybridEngine({}, database)
+
+        results = engine.search("warranty duration")
+
+        self.assertEqual(database.query, "warranty duration")
+        self.assertEqual([item["path"] for item in results], ["warranty.txt"])
+        self.assertIn("two years", results[0]["snippet"])
+
     def test_limit_and_source_metadata_are_preserved(self) -> None:
         rows = [{"chunk_id": "x", "path": "x.pdf", "snippet": "passage", "page_or_line": "page 4", "heading": "Summary"}]
         result = HybridEngine.reciprocal_rank_fusion(["x"], [], rows, 1)

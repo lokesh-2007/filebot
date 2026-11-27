@@ -161,16 +161,17 @@ class HybridEngine:
         # documents do not outrank an empty result through semantic similarity.
         if len(normalized_query.split()) == 1 and len(normalized_query) <= 3:
             return self._search_short_token(normalized_query, limit)
-        if self._embedder is None:
-            return []
         take = max(limit * 4, 20)
         dense: list[str] = []
-        try:
-            vector = list(self._embedder.query_embed(query))[0].tolist()
-            result = self._collection.query(query_embeddings=[vector], n_results=take, include=["documents", "metadatas"])
-            dense = [chunk_id for chunk_id in (result.get("ids") or [[]])[0]]
-        except Exception:
-            log.exception("Vector search failed")
+        if self._embedder is not None and self._collection is not None:
+            try:
+                vector = list(self._embedder.query_embed(query))[0].tolist()
+                result = self._collection.query(
+                    query_embeddings=[vector], n_results=take, include=["documents", "metadatas"],
+                )
+                dense = [chunk_id for chunk_id in (result.get("ids") or [[]])[0]]
+            except Exception:
+                log.exception("Vector search failed; continuing with lexical retrieval")
         lexical: list[str] = []
         rows = list(self._rows or [])
         known_ids = {str(row["chunk_id"]) for row in rows}

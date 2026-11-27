@@ -21,6 +21,9 @@ still being validated.
   with bounded work batches and polling between batches.
 - PDF, DOCX, Markdown, and text parsing feed FastEmbed/ONNX, ChromaDB, and BM25
   retrieval, with Reciprocal Rank Fusion and bounded indexing.
+- SQLite lexical retrieval remains available when the vector embedder is missing
+  or a vector query fails, so a model-backed file answer can still receive exact
+  text matches during degraded local startup.
 - Configured code extensions parse into syntax-aware Tree-sitter chunks with
   line ranges; setup caches grammars so indexing stays offline.
 - The dedicated Search action queries the local index without Ollama. Chat
