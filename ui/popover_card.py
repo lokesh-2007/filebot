@@ -262,12 +262,9 @@ class PopoverCard(QWidget):
         self.ask_button.setEnabled(False)
         self.stop_button.setEnabled(not force_search)
         self.status_changed.emit("active")
-        router = getattr(self.runtime, "router", None)
-        route = getattr(router, "route", None)
-        intent = route(prompt) if callable(route) else "chat"
-        self._current_chat_prompt = (
-            prompt if not force_search and intent not in {"search", "open"} else None
-        )
+        # Ask is always a conversation turn. The dedicated Search button is
+        # the only path that replaces the answer pane with a result list.
+        self._current_chat_prompt = None if force_search else prompt
         self._current_stream_text = ""
         if self._current_chat_prompt is not None:
             self._render_chat_transcript("Thinking…")

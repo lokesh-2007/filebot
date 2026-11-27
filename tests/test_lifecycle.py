@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -441,6 +442,7 @@ class LifecycleTests(unittest.TestCase):
         class SlowStreamingRuntime:
             def __init__(self) -> None:
                 self.release = threading.Event()
+                self.router = SimpleNamespace(route=lambda _prompt: "search")
 
             def ask_streaming(self, prompt, on_delta) -> str:
                 on_delta("Partial answer")

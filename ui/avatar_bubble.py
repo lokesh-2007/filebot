@@ -15,7 +15,9 @@ class AvatarBubble(QWidget):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowTitle("FileBot")
         self.setAccessibleName("FileBot status avatar")
-        self.setAccessibleDescription("Click to open FileBot local search and command approval.")
+        self.setAccessibleDescription(
+            "Click to chat with FileBot, search local files, and review command proposals."
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(58, 58)
         self.label = QLabel("FB", self)
