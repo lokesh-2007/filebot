@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.bot_runtime import BotRuntime
+from agent.fast_router import FastRouter
 from agent.tools.search_tool import SearchFilesTool
 from storage.db import Database
 
@@ -15,6 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChatContextTests(unittest.TestCase):
+    def test_command_routing_does_not_capture_normal_conversation(self) -> None:
+        router = FastRouter()
+
+        self.assertEqual(router.route("Run me through the plan"), "chat")
+        self.assertEqual(router.route("I run the support team"), "chat")
+        self.assertEqual(router.route("Run `whoami`"), "cmd")
+        self.assertEqual(router.route("Run the tests"), "cmd")
+        self.assertEqual(router.route("Find and run a command"), "cmd")
+
     def test_retrieved_prompt_context_is_bounded_and_keeps_source_paths(self) -> None:
         hits = [
             {"path": rf"C:\Docs\source-{index}.md", "snippet": "evidence " * 1000}

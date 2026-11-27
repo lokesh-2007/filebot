@@ -6,7 +6,14 @@ import re
 
 class FastRouter:
     """Route obvious file searches and command requests without an LLM."""
-    _cmd = re.compile(r"\b(run|execute|use cmd|command prompt|terminal command)\b", re.I)
+    _cmd = re.compile(
+        r"\b(?:use\s+cmd|command prompt|terminal command)\b"
+        r"|\b(?:run|execute)\s+(?:the\s+|this\s+|a\s+)?"
+        r"(?:command|cmd|script|program|tests?|build|task|file)\b"
+        r"|\b(?:run|execute)\s+(?:`[^`]+`|'[^']+'|\"[^\"]+\")"
+        r"|\brun\s+(?:whoami|dir|ipconfig|npm|python|git|cargo|pytest|powershell)\b",
+        re.I,
+    )
     _search = re.compile(r"\b(find|search|locate|where is|look for)\b", re.I)
     _open_file = re.compile(
         r"\b(?:open|view|show)\b.{0,48}\b(?:file|document|pdf|docx|folder|notes?)\b"

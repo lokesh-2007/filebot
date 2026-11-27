@@ -718,6 +718,10 @@ class PolicyAndParserTests(unittest.TestCase):
     def test_fast_router_prioritizes_command_gate(self) -> None:
         router = FastRouter()
         self.assertEqual(router.route("Find and run a command"), "cmd")
+        self.assertEqual(router.route("Run me through the plan"), "chat")
+        self.assertEqual(router.route("I run the support team"), "chat")
+        self.assertEqual(router.route("Run `whoami`"), "cmd")
+        self.assertEqual(router.route("Run the tests"), "cmd")
         self.assertEqual(router.route("Find the meeting notes"), "search")
         self.assertEqual(router.route("Open the PDF document"), "open")
         self.assertEqual(router.route("Explain this concept"), "chat")
