@@ -6,9 +6,10 @@
   active, and CMD-approval states while retaining mouse, keyboard-accessible,
   and quit behavior.
 - Add bounded, read-only access to indexed file excerpts for conversational
-  answers, including direct requests such as “read report.txt”. Enforce current
-  index membership and configured-root containment; file mutation stays out of
-  the Python app and CMD execution remains behind explicit approval.
+  answers, including direct “read report.txt” requests and model-backed
+  summaries of specifically named files. Enforce current index membership and
+  configured-root containment; file mutation stays out of the Python app and
+  CMD execution remains behind explicit approval.
 - Add bounded folder listings for configured roots; skip links that resolve
   outside those roots and keep the list output capped for small model contexts.
 - Keep SQLite lexical retrieval available when vector dependencies or queries

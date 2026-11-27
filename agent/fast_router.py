@@ -6,6 +6,7 @@ import re
 
 class FastRouter:
     """Route obvious file actions and command requests without extra model work."""
+    _summary_request = re.compile(r"\bsummari[sz]e\b", re.I)
     _cmd = re.compile(
         r"\b(?:use\s+cmd|command prompt|terminal command)\b"
         r"|\b(?:run|execute)\s+(?:the\s+|this\s+|a\s+)?"
@@ -34,8 +35,9 @@ class FastRouter:
         re.I,
     )
     _open_target = re.compile(
-        r"\b(?:open|view|show|read)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?[\"']?"
-        r"([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
+        r"\b(?:(?:open|view|show|read|summari[sz]e)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:(?:attached|this|that|my)\s+)?(?:file\s+)?|what(?:'s| is)\s+in\s+)"
+        r"[\"']?([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
         re.I,
     )
     _list_target = re.compile(
@@ -62,6 +64,10 @@ class FastRouter:
         target = match.group("path").strip().strip('"').strip("'").rstrip(".,;?!")
         target = re.sub(r"^(?:files|contents)\s+(?:in|of)\s+", "", target, flags=re.I)
         return target or None
+
+    def is_summary_request(self, prompt: str) -> bool:
+        """Keep summary requests model-backed even when the named file is local."""
+        return bool(self._summary_request.search(prompt))
 
     def route(self, prompt: str) -> str:
         """Return cmd, search, open, or chat; CMD intent only proposes for approval."""

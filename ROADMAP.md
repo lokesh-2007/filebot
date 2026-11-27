@@ -32,11 +32,12 @@ still being validated.
   characters and model tool results at ten excerpts to protect the configured
   local-model context window. Explicitly named indexed-file opens still bypass
   Ollama; file opening rechecks index membership and configured-root containment.
-- Ask can now read a bounded excerpt from a specifically named indexed file or
-  call a per-intent read-only file tool. Reads enforce the configured-root and
-  current-index checks and cap returned text at 12,000 characters. File changes
-  remain unsupported by the Python app; CMD remains proposal-only until the
-  explicit UI approval action is taken.
+- Ask can now read a bounded excerpt from a specifically named indexed file,
+  summarize a named file using a capped excerpt, or call a per-intent read-only
+  file tool. Reads enforce configured-root and current-index checks and cap
+  returned text at 12,000 characters. File changes remain unsupported by the
+  Python app; CMD remains proposal-only until the explicit UI approval action is
+  taken.
 - Chat can list a requested configured folder without model latency; the listing
   enforces root containment, skips links outside allowed roots, and bounds both
   the scan and displayed names.

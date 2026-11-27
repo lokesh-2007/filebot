@@ -476,7 +476,7 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(signal["open_count"], 1)
 
-    def test_explicit_indexed_file_read_bypasses_model_and_returns_indexed_content(self) -> None:
+    def test_explicit_read_is_direct_and_summary_uses_bounded_indexed_content(self) -> None:
         file_path = self.root / "Project Notes.txt"
         file_path.write_text("Milestone one is complete.", encoding="utf-8")
         self.db.replace_file(
@@ -495,6 +495,30 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertIn("Milestone one is complete.", answer)
         check_ollama.assert_not_called()
+
+        class SummaryBot:
+            async def run(self, prompt, **_kwargs):
+                seen_prompts.append(prompt)
+                return SimpleNamespace(content="The milestone is complete.")
+
+        seen_prompts: list[str] = []
+
+        def run_immediate(coroutine, *, timeout=None):
+            try:
+                coroutine.send(None)
+            except StopIteration as completed:
+                return completed.value
+            raise AssertionError("The fake summary call should finish immediately")
+
+        runtime.bot = SummaryBot()
+        with patch.object(
+            runtime, "_run_agent", side_effect=lambda _intent, coro: run_immediate(coro),
+        ):
+            summary = runtime.ask_streaming("Summarize the attached Project Notes.txt", lambda _delta: None)
+
+        self.assertEqual(summary, "The milestone is complete.")
+        self.assertIn("Milestone one is complete.", seen_prompts[0])
+        self.assertIn("untrusted reference data", seen_prompts[0])
 
     def test_explicit_folder_listing_stays_inside_configured_roots_and_skips_model(self) -> None:
         (self.root / "Reports").mkdir()
@@ -516,6 +540,10 @@ class DatabaseTests(unittest.TestCase):
         router = FastRouter()
         self.assertEqual(router.open_target('Open "Project Notes.pdf" please'), "Project Notes.pdf")
         self.assertEqual(router.open_target('Read "Project Notes.txt" please'), "Project Notes.txt")
+        self.assertEqual(router.open_target("Summarize the attached report.pdf"), "report.pdf")
+        self.assertEqual(router.open_target("What's in report.pdf?"), "report.pdf")
+        self.assertTrue(router.is_summary_request("Summarize report.pdf"))
+        self.assertFalse(router.is_summary_request("Read report.pdf"))
         self.assertEqual(router.list_target("What's in Downloads?"), "Downloads")
         self.assertEqual(router.list_target("List files in Reports"), "Reports")
         self.assertEqual(router.route("What files are in Reports?"), "list")
