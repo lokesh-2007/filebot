@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
+    thread,
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -82,11 +83,29 @@ pub trait OllamaTransport {
 pub struct LocalOllamaClient {
     client: Client,
     base_url: Url,
+    auto_start: bool,
+    startup_timeout: Duration,
+    process: Option<Child>,
 }
 
 impl LocalOllamaClient {
     /// Create a bounded HTTP client pointed only to a local Ollama service.
     pub fn new(base_url: &str) -> Result<Self, AgentError> {
+        Self::with_startup(base_url, true, 30)
+    }
+
+    /// Configure on-demand server startup to match the Python app settings.
+    pub fn with_startup(
+        base_url: &str,
+        auto_start: bool,
+        startup_timeout_seconds: u64,
+    ) -> Result<Self, AgentError> {
+        if !(1..=120).contains(&startup_timeout_seconds) {
+            return Err(ConfigError::Invalid(
+                "Ollama startup timeout must be between 1 and 120 seconds".into(),
+            )
+            .into());
+        }
         let parsed = Url::parse(base_url)
             .map_err(|error| ConfigError::Invalid(format!("invalid Ollama URL: {error}")))?;
         if parsed.scheme() != "http" || !is_loopback_host(parsed.host_str()) {
@@ -99,6 +118,9 @@ impl LocalOllamaClient {
         Ok(Self {
             client,
             base_url: parsed,
+            auto_start,
+            startup_timeout: Duration::from_secs(startup_timeout_seconds),
+            process: None,
         })
     }
 
@@ -132,12 +154,77 @@ impl LocalOllamaClient {
         }
         serde_json::from_slice(&bytes).map_err(|error| AgentError::Response(error.to_string()))
     }
+
+    fn start_server(&mut self) -> Result<(), AgentError> {
+        if let Some(process) = self.process.as_mut()
+            && process.try_wait()?.is_none()
+        {
+            return Ok(());
+        }
+        self.process = None;
+        let executable = find_ollama_executable().ok_or_else(|| {
+            AgentError::Response(
+                "Ollama is not on PATH and its standard Windows install was not found. Install Ollama or disable models.ollama.auto_start.".into(),
+            )
+        })?;
+        let mut command = Command::new(executable);
+        command
+            .arg("serve")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        self.process = Some(command.spawn().map_err(|error| {
+            AgentError::Response(format!("Could not start the local Ollama server: {error}"))
+        })?);
+        Ok(())
+    }
 }
 
 impl OllamaTransport for LocalOllamaClient {
     fn check_model(&mut self, model: &str) -> Result<(), AgentError> {
-        let response = self.client.get(self.endpoint("api/tags")?).send()?;
-        let payload = Self::checked_json(response)?;
+        let endpoint = self.endpoint("api/tags")?;
+        let payload = match self.client.get(endpoint.clone()).send() {
+            Ok(response) => Self::checked_json(response)?,
+            Err(_first_error) if self.auto_start => {
+                self.start_server()?;
+                let deadline = Instant::now() + self.startup_timeout;
+                let mut last_error;
+                loop {
+                    if let Some(process) = self.process.as_mut()
+                        && let Some(status) = process.try_wait()?
+                    {
+                        self.process = None;
+                        return Err(AgentError::Response(format!(
+                            "Ollama exited while FileBot waited for its local server (status {status}). Open Ollama and try again."
+                        )));
+                    }
+                    match self.client.get(endpoint.clone()).send() {
+                        Ok(response) => break Self::checked_json(response)?,
+                        Err(error) => {
+                            last_error = error.to_string();
+                            if Instant::now() >= deadline {
+                                return Err(AgentError::Response(format!(
+                                    "Ollama did not become ready within {} seconds. Open Ollama and try again. Details: {last_error}",
+                                    self.startup_timeout.as_secs()
+                                )));
+                            }
+                            thread::sleep(Duration::from_millis(250));
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(AgentError::Response(format!(
+                    "FileBot cannot reach Ollama at {}. Start Ollama and try again. Details: {error}",
+                    self.base_url
+                )));
+            }
+        };
         let models = payload
             .get("models")
             .and_then(Value::as_array)
@@ -249,6 +336,34 @@ fn is_loopback_host(host: Option<&str>) -> bool {
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback()),
     }
+}
+
+fn find_ollama_executable() -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) {
+        "ollama.exe"
+    } else {
+        "ollama"
+    };
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(executable_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    if cfg!(windows)
+        && let Some(local_app_data) = std::env::var_os("LOCALAPPDATA")
+    {
+        let candidate = PathBuf::from(local_app_data)
+            .join("Programs")
+            .join("Ollama")
+            .join("ollama.exe");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Fixed action interface: there is deliberately no shell execution method.
@@ -733,7 +848,11 @@ pub fn build_runtime(
     database: Database,
     policy_path: impl AsRef<Path>,
 ) -> Result<BotRuntime<LocalOllamaClient, FileBotTools>, AgentError> {
-    let transport = LocalOllamaClient::new(&settings.models.ollama.base_url)?;
+    let transport = LocalOllamaClient::with_startup(
+        &settings.models.ollama.base_url,
+        settings.models.ollama.auto_start,
+        settings.models.ollama.startup_timeout_seconds,
+    )?;
     let tools = FileBotTools::new(settings, database, policy_path)?;
     BotRuntime::new(settings, transport, tools)
 }
@@ -813,6 +932,15 @@ mod tests {
         assert!(LocalOllamaClient::new("http://192.0.2.1:11434").is_err());
         assert!(LocalOllamaClient::new("http://localhost:11434").is_ok());
         assert!(LocalOllamaClient::new("http://[::1]:11434").is_ok());
+    }
+
+    #[test]
+    fn local_ollama_startup_options_are_bounded() {
+        let client = LocalOllamaClient::with_startup("http://127.0.0.1:11434", false, 45).unwrap();
+        assert!(!client.auto_start);
+        assert_eq!(client.startup_timeout, Duration::from_secs(45));
+        assert!(LocalOllamaClient::with_startup("http://127.0.0.1:11434", true, 0).is_err());
+        assert!(LocalOllamaClient::with_startup("http://127.0.0.1:11434", true, 121).is_err());
     }
 
     #[test]

@@ -83,6 +83,10 @@ pub struct OllamaSettings {
     #[serde(default)]
     pub api_base: String,
     pub model: String,
+    #[serde(default = "default_ollama_auto_start")]
+    pub auto_start: bool,
+    #[serde(default = "default_ollama_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
     #[serde(default = "default_keep_alive")]
     pub keep_alive: String,
     #[serde(default = "default_num_ctx")]
@@ -179,9 +183,10 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
     }
     if !(512..=32_768).contains(&settings.models.ollama.num_ctx)
         || !(1..=4096).contains(&settings.models.ollama.num_predict)
+        || !(1..=120).contains(&settings.models.ollama.startup_timeout_seconds)
     {
         return Err(ConfigError::Invalid(
-            "Ollama num_ctx must be 512..32768 and num_predict 1..4096".into(),
+            "Ollama context, generation, and startup timeout limits are invalid".into(),
         ));
     }
     if settings.models.embeddings.model.trim().is_empty()
@@ -277,6 +282,12 @@ fn default_log_level() -> String {
 fn default_keep_alive() -> String {
     "0".into()
 }
+fn default_ollama_auto_start() -> bool {
+    true
+}
+fn default_ollama_startup_timeout_seconds() -> u64 {
+    30
+}
 fn default_num_ctx() -> u32 {
     4096
 }
@@ -328,6 +339,8 @@ mod tests {
         assert_eq!(settings.runtime.idle_unload_seconds, 120);
         assert_eq!(settings.models.ollama.num_ctx, 4096);
         assert_eq!(settings.models.ollama.num_predict, 256);
+        assert!(settings.models.ollama.auto_start);
+        assert_eq!(settings.models.ollama.startup_timeout_seconds, 30);
     }
 
     #[test]

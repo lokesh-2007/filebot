@@ -32,7 +32,9 @@ application passes the Windows UI and performance gates below.
 - A local-only Ollama runtime with model preflight, bounded turn history,
   per-intent tool allowlists, Qwen text-call compatibility, five-call limits,
   explicit proposal-only CMD handling, configured idle unload, and cancellable
-  streaming for ordinary chat turns.
+  streaming for ordinary chat turns. If configured, it starts the local Ollama
+  server on the first model request, waits for readiness, and retries startup if
+  its child server process exits; startup waiting itself is not yet cancellable.
 - Indexed file opening validates canonical paths, configured roots, and current
   SQLite index membership. The agent has no shell execution or file-write tool.
 - A low-cost lifecycle supervisor starts dormant, handles wake/streamed turns,

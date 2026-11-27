@@ -1,5 +1,16 @@
 # Changelog
 
+## Rust on-demand Ollama recovery 0.6.11 — 2026-11-27
+
+- Match the Python settings for local Ollama auto-start and bounded startup
+  waiting. Rust now finds the standard Windows install or PATH entry, starts
+  `ollama serve` without a console on first model use, and reports early exit,
+  missing executable, timeout, or missing model clearly.
+- Recheck and restart a server process FileBot launched if it later exits.
+- Verify Rust formatting, clippy, and core/desktop type checking. Live Ollama
+  startup and Rust test execution remain unverified in this network-restricted
+  environment because ONNX Runtime is unavailable for linking.
+
 ## Rust retrieval signal parity 0.6.10 — 2026-11-27
 
 - Wire the Rust settings glossary into one-time SQLite seeding and query
