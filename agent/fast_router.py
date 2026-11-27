@@ -27,7 +27,10 @@ class FastRouter:
     )
     _list_folder = re.compile(
         r"\blist(?:\s+(?:files|contents))?(?:\s+(?:in|of))?\b"
-        r"|\bwhat(?:'s| is)\s+in\b|\bcontents\s+of\b",
+        r"|\bwhat(?:'s| is)\s+in\b|\bwhat\s+files\s+(?:are\s+)?in\b"
+        r"|\bcontents\s+of\b"
+        r"|\b(?:show|display|browse)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:files|contents|items)\s+(?:in|of)\b",
         re.I,
     )
     _open_target = re.compile(
@@ -37,7 +40,9 @@ class FastRouter:
     )
     _list_target = re.compile(
         r"\b(?:list(?:\s+(?:files|contents))?(?:\s+(?:in|of))?|"
-        r"what(?:'s| is)\s+in|contents\s+of)\s*(?:the\s+|my\s+)?"
+        r"what(?:'s| is)\s+in|what\s+files\s+(?:are\s+)?in|contents\s+of|"
+        r"(?:show|display|browse)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:files|contents|items)\s+(?:in|of))\s*(?:the\s+|my\s+)?"
         r"(?P<path>[^?!]+?)\s*[?.!]*$",
         re.I,
     )

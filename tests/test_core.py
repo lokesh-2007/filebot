@@ -518,6 +518,11 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(router.open_target('Read "Project Notes.txt" please'), "Project Notes.txt")
         self.assertEqual(router.list_target("What's in Downloads?"), "Downloads")
         self.assertEqual(router.list_target("List files in Reports"), "Reports")
+        self.assertEqual(router.route("What files are in Reports?"), "list")
+        self.assertEqual(router.list_target("What files are in Reports?"), "Reports")
+        self.assertEqual(router.route("Show me the files in Reports"), "list")
+        self.assertEqual(router.list_target("Show me the files in Reports"), "Reports")
+        self.assertEqual(router.route("What's in quarterly-summary.txt?"), "read")
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
 
