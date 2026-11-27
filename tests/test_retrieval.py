@@ -47,6 +47,39 @@ class ReciprocalRankFusionTests(unittest.TestCase):
         self.assertEqual([item["path"] for item in results], ["warranty.txt"])
         self.assertIn("two years", results[0]["snippet"])
 
+    def test_engine_activation_degrades_to_lexical_search_if_embeddings_fail(self) -> None:
+        row = {"chunk_id": "warranty", "path": "warranty.txt", "file_name": "warranty.txt",
+               "snippet": "The warranty lasts two years.", "page_or_line": None,
+               "heading": None, "open_count": 0, "upvotes": 0, "downvotes": 0}
+
+        class FakeDatabase:
+            def all_chunks(self):
+                return [row]
+
+            def search_lexical(self, _query, _limit):
+                return [row]
+
+        class BrokenTextEmbedding:
+            def __init__(self, **_kwargs):
+                raise RuntimeError("embedding model files are unavailable")
+
+        fastembed = ModuleType("fastembed")
+        fastembed.TextEmbedding = BrokenTextEmbedding
+        settings = {"models": {
+            "embeddings": {"model": "test-model", "cache_dir": "cache"},
+            "vector_store": {"path": "vectors"},
+        }}
+        engine = HybridEngine(settings, FakeDatabase())
+
+        with patch.dict(sys.modules, {"fastembed": fastembed, "bm25s": None}), self.assertLogs(
+            "retrieval.hybrid_engine", level="ERROR"
+        ):
+            engine.activate()
+        results = engine.search("warranty duration")
+
+        self.assertIsNone(engine._embedder)
+        self.assertEqual([item["path"] for item in results], ["warranty.txt"])
+
     def test_limit_and_source_metadata_are_preserved(self) -> None:
         rows = [{"chunk_id": "x", "path": "x.pdf", "snippet": "passage", "page_or_line": "page 4", "heading": "Summary"}]
         result = HybridEngine.reciprocal_rank_fusion(["x"], [], rows, 1)

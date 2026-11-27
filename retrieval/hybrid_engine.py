@@ -30,15 +30,27 @@ class HybridEngine:
 
     def activate(self) -> None:
         with self._lock:
-            from fastembed import TextEmbedding
-            import chromadb
-            model = self.settings["models"]["embeddings"]
-            self._embedder = TextEmbedding(model_name=model["model"], cache_dir=str(expand_config_path(model["cache_dir"])))
-            vector_path = expand_config_path(self.settings["models"]["vector_store"]["path"])
-            vector_path.mkdir(parents=True, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=str(vector_path))
-            self._collection = self._client.get_or_create_collection(name="filebot_chunks", metadata={"hnsw:space": "cosine"})
             self._refresh_bm25()
+            try:
+                from fastembed import TextEmbedding
+                import chromadb
+                model = self.settings["models"]["embeddings"]
+                embedder = TextEmbedding(
+                    model_name=model["model"],
+                    cache_dir=str(expand_config_path(model["cache_dir"])),
+                )
+                vector_path = expand_config_path(self.settings["models"]["vector_store"]["path"])
+                vector_path.mkdir(parents=True, exist_ok=True)
+                client = chromadb.PersistentClient(path=str(vector_path))
+                collection = client.get_or_create_collection(
+                    name="filebot_chunks", metadata={"hnsw:space": "cosine"},
+                )
+                self._embedder, self._client, self._collection = embedder, client, collection
+            except Exception:
+                self._embedder = self._collection = self._client = None
+                log.exception(
+                    "Vector retrieval unavailable; continuing with BM25/SQLite lexical retrieval"
+                )
 
     def _refresh_bm25(self) -> None:
         with self._lock:
