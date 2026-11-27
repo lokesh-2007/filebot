@@ -410,7 +410,7 @@ class DatabaseTests(unittest.TestCase):
         runtime.bot = bot
         full_registry = bot._loop.tools
         runtime._tool_registries = {
-            "chat": Registry([]),
+            "chat": Registry(["search_files"]),
             "search": Registry(["search_files"]),
             "open": Registry(["open_file"]),
             "cmd": Registry(["propose_cmd"]),
@@ -426,7 +426,7 @@ class DatabaseTests(unittest.TestCase):
             runtime.close()
 
         self.assertEqual(bot.seen_tools, [
-            [], ["open_file"], ["propose_cmd"],
+            ["search_files"], ["open_file", "search_files"], ["propose_cmd"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
 
@@ -462,7 +462,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
 
-    def test_obvious_search_uses_index_without_ollama_or_model(self) -> None:
+    def test_explicit_search_action_uses_index_without_ollama_or_model(self) -> None:
         matches = [{"path": "C:/docs/notes.txt", "snippet": "meeting notes"}]
 
         class FakeEngine:
@@ -474,7 +474,7 @@ class DatabaseTests(unittest.TestCase):
         }}}, self.db, FakeEngine())
         with patch.object(runtime, "_check_ollama_ready") as check_ollama, \
                 patch.object(runtime.indexer, "drain") as drain:
-            self.assertEqual(runtime.ask_streaming("Find meeting notes", lambda _delta: None), matches)
+            self.assertEqual(runtime.search("Find meeting notes"), matches)
             check_ollama.assert_not_called()
             drain.assert_not_called()
 

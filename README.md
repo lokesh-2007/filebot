@@ -1,6 +1,6 @@
 # FileBot 0.6.14
 
-FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
+FileBot is a local Windows file assistant with conversational chat, indexed-file search/open, and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
 
 See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
 See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.
@@ -37,7 +37,7 @@ The FastEmbed embedding model is downloaded on the first wake into the cache dir
 
 Edit `config/settings.yaml` to choose folders to index, supported extensions, maximum file size, model, Ollama URL, `keep_alive`, and `runtime.request_timeout_seconds` (180 seconds by default). Set `keep_alive` to `"0"` for immediate Ollama unload or `"2m"` to allow a two-minute model cache. The **Stop** button cancels the model preflight, Ollama startup wait, or chat request. The avatar hotkey defaults to **Ctrl+Alt+Space**. The initial watched roots default to `~/Documents`.
 
-The **Search** button and obvious natural-language file searches (such as “find meeting notes”) query the local index directly; explicit requests such as “open Lab3.pdf” also bypass Ollama and safely open an exact indexed file. Duplicate filenames are shown as choices. **Ask** starts the Ollama server on demand on Windows by default (`models.ollama.auto_start: true`) and waits up to `startup_timeout_seconds` (30 by default). Use **Stop** to cancel a model request that is taking too long. If Ollama cannot be found, start it from the Start menu. If the configured model is missing, run `ollama pull qwen2.5-coder:3b` (or pull the model name you set in `settings.yaml`). Ollama is only checked for model-backed requests.
+**Ask** works as a conversational local assistant: it retrieves relevant excerpts from indexed files for each turn, grounds file answers in those excerpts, and can search further when needed. Use **Search** when you want an immediate list of matching files without a generated answer. Explicit requests such as “open Lab3.pdf” safely open an exact indexed file; duplicate filenames are shown as choices. **Ask** starts the Ollama server on demand on Windows by default (`models.ollama.auto_start: true`) and waits up to `startup_timeout_seconds` (30 by default). Use **Stop** to cancel a model request that is taking too long. If Ollama cannot be found, start it from the Start menu. If the configured model is missing, run `ollama pull qwen2.5-coder:3b` (or pull the model name you set in `settings.yaml`).
 
 Start FileBot hidden in the signed-in desktop session with:
 

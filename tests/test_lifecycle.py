@@ -223,7 +223,7 @@ class LifecycleTests(unittest.TestCase):
         card.input.setText("hello")
         card.submit()
         self.assertTrue(runtime.reset_called)
-        self.assertIn("Starting the local model request", card.answer.toPlainText())
+        self.assertIn("Thinking", card.answer.toPlainText())
         self.assertFalse(card.input.isEnabled())
         runtime.release.set()
         deadline = time.monotonic() + 2
@@ -231,7 +231,8 @@ class LifecycleTests(unittest.TestCase):
             self.app.processEvents()
             time.sleep(0.01)
         self.app.processEvents()
-        self.assertEqual(card.answer.toPlainText(), "Answer received")
+        self.assertIn("You:\nhello", card.answer.toPlainText())
+        self.assertIn("FileBot:\nAnswer received", card.answer.toPlainText())
         self.assertTrue(card.input.isEnabled())
         card.close()
 
@@ -277,7 +278,7 @@ class LifecycleTests(unittest.TestCase):
         card._show_wait_feedback()
 
         self.assertIn("10 seconds", card.answer.toPlainText())
-        self.assertIn("Check that Ollama is running", card.answer.toPlainText())
+        self.assertIn("The request is still active", card.answer.toPlainText())
         card.close()
 
     def test_chat_can_be_cancelled_without_blocking_the_popover(self) -> None:
@@ -312,7 +313,7 @@ class LifecycleTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(runtime.cancelled.is_set())
         self.assertFalse(card.stop_button.isEnabled())
-        self.assertEqual(card.answer.toPlainText(), "Request cancelled")
+        self.assertIn("Request cancelled", card.answer.toPlainText())
         card.close()
 
     def test_glossary_editor_saves_changes_through_the_dialog(self) -> None:
@@ -455,7 +456,8 @@ class LifecycleTests(unittest.TestCase):
             self.app.processEvents()
             time.sleep(0.01)
 
-        self.assertEqual(card.answer.toPlainText(), "Partial answer")
+        self.assertIn("You:\nhello", card.answer.toPlainText())
+        self.assertIn("FileBot:\nPartial answer", card.answer.toPlainText())
         self.assertFalse(card._request_timer.isActive())
         runtime.release.set()
         deadline = time.monotonic() + 2
@@ -463,7 +465,8 @@ class LifecycleTests(unittest.TestCase):
             self.app.processEvents()
             time.sleep(0.01)
         self.app.processEvents()
-        self.assertEqual(card.answer.toPlainText(), "Partial answer complete")
+        self.assertIn("You:\nhello", card.answer.toPlainText())
+        self.assertIn("FileBot:\nPartial answer complete", card.answer.toPlainText())
         card.close()
 
     def test_chat_stream_batches_widget_updates_and_flushes_final_text(self) -> None:

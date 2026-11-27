@@ -23,8 +23,11 @@ still being validated.
   retrieval, with Reciprocal Rank Fusion and bounded indexing.
 - Configured code extensions parse into syntax-aware Tree-sitter chunks with
   line ranges; setup caches grammars so indexing stays offline.
-- Search requests and explicitly named indexed-file opens bypass Ollama. File
-  opening rechecks index membership and configured-root containment.
+- The dedicated Search action queries the local index without Ollama. Chat
+  requests retrieve relevant excerpts before generation and can call the local
+  search tool for follow-up evidence. Explicitly named indexed-file opens still
+  bypass Ollama; file opening rechecks index membership and configured-root
+  containment.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.
@@ -38,6 +41,9 @@ still being validated.
   shutdown before a source-based update.
 - Chat stream deltas are coalesced into 30 ms UI updates, avoiding a Qt text
   widget mutation for every model fragment while keeping partial text visible.
+- The popover now labels itself as a local assistant and retains the current
+  session's user/assistant turns while a new answer streams. This transcript is
+  in-memory only; conversation persistence across app restarts is not supported.
 - Nanobot skill summaries are explicitly excluded from FileBot prompts because
   FileBot does not expose Nanobot's skill reader. This avoids a context-budget
   rejection caused by treating `"*"` as a literal disabled skill name.

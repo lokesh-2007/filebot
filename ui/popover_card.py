@@ -91,7 +91,7 @@ class PopoverCard(QWidget):
         self.setFixedWidth(390)
         self.setStyleSheet("QWidget{background:#171923;color:#f5f5f5;font:10pt 'Segoe UI'} QLineEdit,QTextEdit,QListWidget{background:#242736;border:1px solid #40445a;border-radius:7px;padding:7px} QPushButton{background:#5141a4;border:0;border-radius:6px;padding:6px 10px} QFrame{border:1px solid #45495e;border-radius:7px}")
         layout = QVBoxLayout(self)
-        title = QLabel("FileBot  ·  local search")
+        title = QLabel("FileBot  ·  local assistant")
         title.setStyleSheet("font-weight:700;font-size:12pt")
         layout.addWidget(title)
         self.glossary_button = QPushButton("Search vocabulary…")
@@ -99,7 +99,7 @@ class PopoverCard(QWidget):
         self.glossary_button.clicked.connect(self.edit_glossary)
         layout.addWidget(self.glossary_button)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Search files or ask a question…")
+        self.input.setPlaceholderText("Search files or chat with FileBot…")
         self.input.returnPressed.connect(self.submit)
         self.input.textEdited.connect(lambda _text: self.activity.emit())
         layout.addWidget(self.input)
@@ -133,7 +133,7 @@ class PopoverCard(QWidget):
         layout.addLayout(feedback)
         self.answer = QTextEdit()
         self.answer.setReadOnly(True)
-        self.answer.setMaximumHeight(110)
+        self.answer.setMaximumHeight(180)
         layout.addWidget(self.answer)
         self.pending = QVBoxLayout()
         layout.addLayout(self.pending)
@@ -142,6 +142,9 @@ class PopoverCard(QWidget):
         self._command_queue: list[str] = []
         self._request_elapsed_seconds = 0
         self._chat_has_deltas = False
+        self._chat_turns: list[tuple[str, str]] = []
+        self._current_chat_prompt: str | None = None
+        self._current_stream_text = ""
         self._pending_stream_deltas: list[str] = []
         self._stream_flush_timer = QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
@@ -259,10 +262,17 @@ class PopoverCard(QWidget):
         self.ask_button.setEnabled(False)
         self.stop_button.setEnabled(not force_search)
         self.status_changed.emit("active")
-        self.answer.setPlainText(
-            "Searching indexed files…" if force_search
-            else "Starting the local model request… It can take a little while on first use. Press Stop to cancel."
+        router = getattr(self.runtime, "router", None)
+        route = getattr(router, "route", None)
+        intent = route(prompt) if callable(route) else "chat"
+        self._current_chat_prompt = (
+            prompt if not force_search and intent not in {"search", "open"} else None
         )
+        self._current_stream_text = ""
+        if self._current_chat_prompt is not None:
+            self._render_chat_transcript("Thinking…")
+        else:
+            self.answer.setPlainText("Searching indexed files…")
         self.work_started.emit()
         reset_cancellation = getattr(self.runtime, "reset_cancellation", None)
         if callable(reset_cancellation):
@@ -285,7 +295,10 @@ class PopoverCard(QWidget):
         if not self._chat_has_deltas:
             self._chat_has_deltas = True
             self._request_timer.stop()
-            self.answer.clear()
+            if self._current_chat_prompt is not None:
+                self._render_chat_transcript()
+            else:
+                self.answer.clear()
         self._pending_stream_deltas.append(delta)
         if not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
@@ -296,8 +309,12 @@ class PopoverCard(QWidget):
             return
         delta = "".join(self._pending_stream_deltas)
         self._pending_stream_deltas.clear()
+        first_chat_delta = self._current_chat_prompt is not None and not self._current_stream_text
+        self._current_stream_text += delta
         cursor = self.answer.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        if first_chat_delta:
+            cursor.insertText("\n")
         cursor.insertText(delta)
         self.answer.setTextCursor(cursor)
         self.answer.ensureCursorVisible()
@@ -305,10 +322,30 @@ class PopoverCard(QWidget):
     def _show_wait_feedback(self) -> None:
         """Show elapsed time while waiting for the first streamed model token."""
         self._request_elapsed_seconds += self._request_timer.interval() // 1000
-        self.answer.setPlainText(
-            f"Waiting for the local model ({self._request_elapsed_seconds} seconds)… "
-            "Check that Ollama is running. Press Stop to cancel this request."
+        status = (
+            f"Loading the local model or preparing a reply — {self._request_elapsed_seconds} seconds elapsed. "
+            "The request is still active. Press Stop to cancel."
         )
+        if self._current_chat_prompt is not None:
+            self._render_chat_transcript(status)
+        else:
+            self.answer.setPlainText(status)
+
+    def _render_chat_transcript(self, pending: str | None = None) -> None:
+        """Show prior turns plus the current streamed turn in the answer pane."""
+        lines: list[str] = []
+        for user_text, assistant_text in self._chat_turns:
+            lines.extend((f"You:\n{user_text}", "", f"FileBot:\n{assistant_text}", ""))
+        if self._current_chat_prompt is not None:
+            lines.extend((f"You:\n{self._current_chat_prompt}", "", "FileBot:"))
+            current = self._current_stream_text or pending or ""
+            if current:
+                lines.append(current)
+        self.answer.setPlainText("\n".join(lines).rstrip())
+        cursor = self.answer.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.answer.setTextCursor(cursor)
+        self.answer.ensureCursorVisible()
 
     def _received(self, result: object, error: str) -> None:
         self._request_timer.stop()
@@ -319,7 +356,13 @@ class PopoverCard(QWidget):
         self.search_button.setEnabled(True)
         self.ask_button.setEnabled(True)
         if error:
-            self.answer.setPlainText(error)
+            if self._current_chat_prompt is not None:
+                self._chat_turns.append((self._current_chat_prompt, error))
+                self._current_chat_prompt = None
+                self._current_stream_text = ""
+                self._render_chat_transcript()
+            else:
+                self.answer.setPlainText(error)
             self.work_finished.emit()
             return
         if isinstance(result, list):
@@ -345,7 +388,12 @@ class PopoverCard(QWidget):
                 )
         else:
             final_text = str(result)
-            if not self._chat_has_deltas or self.answer.toPlainText() != final_text:
+            if self._current_chat_prompt is not None:
+                self._chat_turns.append((self._current_chat_prompt, final_text))
+                self._current_chat_prompt = None
+                self._current_stream_text = ""
+                self._render_chat_transcript()
+            elif not self._chat_has_deltas or self.answer.toPlainText() != final_text:
                 self.answer.setPlainText(final_text)
         self._refresh_pending()
         self.work_finished.emit()
