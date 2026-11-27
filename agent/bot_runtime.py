@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agent.fast_router import FastRouter
@@ -550,10 +551,17 @@ class BotRuntime:
         try:
             ollama = self.settings.get("models", {}).get("ollama", {})
             env = os.environ.copy()
+            base_url = str(ollama.get("base_url", "http://127.0.0.1:11434"))
+            parsed_url = urlsplit(base_url if "://" in base_url else f"http://{base_url}")
+            host = parsed_url.hostname or "127.0.0.1"
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            ollama_host = f"{host}:{parsed_url.port or 11434}"
             # Keep the managed local server predictable on modest-memory PCs.
             # Ollama multiplies context allocations for parallel requests and
             # can otherwise keep several models loaded at once.
             env.update({
+                "OLLAMA_HOST": ollama_host,
                 "OLLAMA_MAX_LOADED_MODELS": "1",
                 "OLLAMA_NUM_PARALLEL": "1",
                 "OLLAMA_CONTEXT_LENGTH": str(int(ollama.get("num_ctx", 4096))),

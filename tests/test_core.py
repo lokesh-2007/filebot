@@ -511,10 +511,29 @@ class DatabaseTests(unittest.TestCase):
                 patch("agent.bot_runtime.subprocess.Popen") as launch:
             runtime._start_ollama()
         env = launch.call_args.kwargs["env"]
+        self.assertEqual(env["OLLAMA_HOST"], "127.0.0.1:11434")
         self.assertEqual(env["OLLAMA_MAX_LOADED_MODELS"], "1")
         self.assertEqual(env["OLLAMA_NUM_PARALLEL"], "1")
         self.assertEqual(env["OLLAMA_CONTEXT_LENGTH"], "3072")
         self.assertEqual(env["OLLAMA_KEEP_ALIVE"], "1m")
+
+    def test_managed_ollama_server_binds_configured_loopback_port(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11435", "model": "test-model",
+        }}}, self.db, object())
+        with patch("agent.bot_runtime.shutil.which", return_value="ollama.exe"), \
+                patch("agent.bot_runtime.subprocess.Popen") as launch:
+            runtime._start_ollama()
+        self.assertEqual(launch.call_args.kwargs["env"]["OLLAMA_HOST"], "127.0.0.1:11435")
+
+    def test_managed_ollama_server_uses_default_port_when_url_omits_port(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://localhost", "model": "test-model",
+        }}}, self.db, object())
+        with patch("agent.bot_runtime.shutil.which", return_value="ollama.exe"), \
+                patch("agent.bot_runtime.subprocess.Popen") as launch:
+            runtime._start_ollama()
+        self.assertEqual(launch.call_args.kwargs["env"]["OLLAMA_HOST"], "localhost:11434")
 
     def test_memory_pressure_unloads_only_filebot_managed_model_after_turn(self) -> None:
         runtime = BotRuntime({

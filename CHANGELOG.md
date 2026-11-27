@@ -8,6 +8,11 @@
   leaves external Ollama services alone.
 - Benchmark the synthetic SQLite lexical fallback at 10,000 and 100,000 chunks
   and record measured p50/p95 times and corpus limitations in the roadmap.
+- Bind FileBot-managed Ollama to its configured host and allow the local
+  benchmark to use an alternate loopback port when the default is occupied.
+- Record Windows benchmark findings: port 11434 is already bound but opaque to
+  the session, while loopback connects remain blocked even when Ollama starts
+  successfully on 11435; clarify that these runs do not include inference RAM.
 - Add a synthetic-corpus benchmark for cold/warm chat, wake/index duration,
   FileBot/Ollama private commit and working set, Ollama model/VRAM estimates,
   and total-system RAM. Add chat stage timings and never save prompt/answer text.

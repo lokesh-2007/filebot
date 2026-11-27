@@ -4,10 +4,19 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from scripts.benchmark_chat import _MemorySampler, _ollama_loaded_memory
+from scripts.benchmark_chat import (_MemorySampler, _is_local_ollama_url,
+                                    _ollama_loaded_memory)
 
 
 class BenchmarkReportingTests(unittest.TestCase):
+    def test_benchmark_url_requires_explicit_loopback_address(self) -> None:
+        self.assertTrue(_is_local_ollama_url("http://127.0.0.1:11435"))
+        self.assertTrue(_is_local_ollama_url("http://[::1]:11435/"))
+        self.assertFalse(_is_local_ollama_url("http://127.0.0.1.attacker:11435"))
+        self.assertFalse(_is_local_ollama_url("http://127.0.0.1:11435@example.com"))
+        self.assertFalse(_is_local_ollama_url("https://localhost:11435"))
+        self.assertFalse(_is_local_ollama_url("http://localhost"))
+
     def test_ollama_api_model_and_vram_sizes_are_reported_separately(self) -> None:
         with patch("scripts.benchmark_chat._json_request", return_value={"models": [
             {"size": 2 * 1024 * 1024, "size_vram": 1024 * 1024},

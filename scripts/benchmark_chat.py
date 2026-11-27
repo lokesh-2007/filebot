@@ -17,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -72,6 +73,22 @@ def _model_quantization(base_url: str, model: str) -> str | None:
     details = payload.get("details") if payload else None
     value = details.get("quantization_level") if isinstance(details, dict) else None
     return str(value) if value else None
+
+
+def _is_local_ollama_url(value: str) -> bool:
+    """Accept only explicit HTTP loopback URLs for isolated benchmark requests."""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() == "http"
+        and (parsed.hostname or "").casefold() in {"127.0.0.1", "localhost", "::1"}
+        and port is not None and 1 <= port <= 65535
+        and parsed.username is None and parsed.password is None
+        and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+    )
 
 
 class _MemorySampler:
@@ -209,6 +226,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index-files", type=int, default=100)
     parser.add_argument("--index-file-kb", type=int, default=16)
+    parser.add_argument("--ollama-url", help="Override the local Ollama base URL, e.g. http://127.0.0.1:11435")
     parser.add_argument("--allow-model-download", action="store_true",
                         help="Allow FastEmbed to download its model when cache is missing.")
     args = parser.parse_args()
@@ -217,7 +235,11 @@ def main() -> int:
 
     from agent.bot_runtime import BotRuntime
     settings = copy.deepcopy(load_settings(ROOT / "config" / "settings.yaml"))
-    base_url = str(settings["models"]["ollama"]["base_url"])
+    base_url = str(args.ollama_url or settings["models"]["ollama"]["base_url"]).rstrip("/")
+    if args.ollama_url and not _is_local_ollama_url(base_url):
+        parser.error("--ollama-url must target a loopback HTTP address")
+    settings["models"]["ollama"]["base_url"] = base_url
+    settings["models"]["ollama"]["api_base"] = f"{base_url}/v1"
     model_name = str(settings["models"]["ollama"]["model"])
     model_quantization = _model_quantization(base_url, model_name)
 

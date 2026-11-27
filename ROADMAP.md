@@ -46,6 +46,17 @@ still being validated.
   fixture, not a disk-heavy personal-corpus benchmark or a defined latency SLA.
   No persistent FTS index has been added; larger or slower real corpora still
   need measurement.
+- Ollama integration was retried on the local Windows host. The standard
+  `11434` port is not visible in the current listener list, but Ollama itself
+  reports it cannot bind because the address is already in use. Starting the
+  managed server on free loopback port `11435` succeeds; FileBot's HTTP probe
+  still receives `WinError 10013`, so inference cannot run in this restricted
+  session. In that alternate-port run, FileBot peaked at 264.05 MiB working set
+  / 586.07 MiB private commit and the idle Ollama server at 26.06 MiB / 53.18
+  MiB; the combined sampled peaks were 290.11 MiB working set / 639.21 MiB
+  private commit. No model loaded, quantization/GPU memory were unavailable, and
+  system RAM (14,173 MiB total, 2,262 MiB minimum available) includes unrelated
+  processes. These startup-only numbers do not validate the model memory target.
 - `scripts/benchmark_chat.py` now samples FileBot and Ollama private commit and
   working set separately, Ollama loaded-model/VRAM estimates, whole-system RAM,
   wake/index duration, and cold/warm first-token and completion timing over a
