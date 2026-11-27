@@ -38,6 +38,14 @@ still being validated.
   Shared pages may be counted twice. This is a conservative post-turn response,
   not an enforced cap; Windows threshold behavior and recovery latency need
   validation on supported hardware.
+- The SQLite `LIKE` lexical fallback was measured on this Windows session using
+  a temporary synthetic database and 21 searches per size: 10,000 chunks took
+  34.88 ms p50 / 50.07 ms p95; 100,000 chunks took 237.74 ms p50 / 281.15 ms
+  p95 and returned the single matching row. This suggests the fallback remains
+  usable as a degraded path at 100k chunks, but it is a synthetic in-memory
+  fixture, not a disk-heavy personal-corpus benchmark or a defined latency SLA.
+  No persistent FTS index has been added; larger or slower real corpora still
+  need measurement.
 - `scripts/benchmark_chat.py` now samples FileBot and Ollama private commit and
   working set separately, Ollama loaded-model/VRAM estimates, whole-system RAM,
   wake/index duration, and cold/warm first-token and completion timing over a

@@ -6,6 +6,8 @@
   FileBot requests model unload at 90% of the configured combined resident
   working-set budget; it does not interrupt the request or stop Ollama, and it
   leaves external Ollama services alone.
+- Benchmark the synthetic SQLite lexical fallback at 10,000 and 100,000 chunks
+  and record measured p50/p95 times and corpus limitations in the roadmap.
 - Add a synthetic-corpus benchmark for cold/warm chat, wake/index duration,
   FileBot/Ollama private commit and working set, Ollama model/VRAM estimates,
   and total-system RAM. Add chat stage timings and never save prompt/answer text.
