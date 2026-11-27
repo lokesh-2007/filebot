@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Cache successful Ollama readiness checks briefly to remove a local HTTP
+  round-trip from quick follow-up turns, then invalidate after inference errors.
+  Show first-token wait feedback sooner and guide the model toward concise,
+  natural, result-first responses.
 - Add audited, explicit-approval Windows PowerShell proposals for allowlisted
   inspection and basic file/folder commands. Preserve CMD approvals, block
   PowerShell script/chaining/delete commands, and migrate old audit rows as CMD.

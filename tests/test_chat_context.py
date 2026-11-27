@@ -152,6 +152,7 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("Warranty.txt", prompt)
         self.assertIn("two years", prompt)
         self.assertIn("cite their full paths", prompt)
+        self.assertIn("Answer the main point first", prompt)
         preflight.assert_not_called()
 
     def test_chat_stays_available_when_local_retrieval_fails(self) -> None:

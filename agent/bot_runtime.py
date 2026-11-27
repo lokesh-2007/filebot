@@ -46,6 +46,13 @@ tool actually ran. If a request needs an unavailable action, say so clearly.
 All CMD and PowerShell execution requires the user's separate Approve click.
 """
 _CHAT_CONTEXT_CHAR_BUDGET = 6000
+_OLLAMA_READY_CACHE_SECONDS = 90
+_CHAT_STYLE_GUIDANCE = (
+    "\n\nReply in a natural, helpful conversational voice. Answer the main point first. "
+    "Keep simple replies short and use clear steps for tasks. When you find or change files, "
+    "report the result and exact path. Ask one focused question only when needed. Avoid filler, "
+    "canned greetings, and repeating the user's request."
+)
 
 
 def _ensure_filebot_instructions(workspace: Path) -> None:
@@ -127,6 +134,7 @@ class BotRuntime:
         self._request_timeout_seconds = min(600, max(
             15, int(settings.get("runtime", {}).get("request_timeout_seconds", 180)),
         ))
+        self._ollama_ready_until = 0.0
         self._turn_lock = threading.Lock()
         self._tool_registries: dict[str, Any] = {}
         self._ollama_process: subprocess.Popen[bytes] | None = None
@@ -405,6 +413,7 @@ class BotRuntime:
                     "Answer general questions normally; do not claim that a file supports the answer."
                 )
             prompt += context
+        prompt += _CHAT_STYLE_GUIDANCE
         return intent, prompt
 
     @staticmethod
@@ -443,6 +452,9 @@ class BotRuntime:
 
     def _check_ollama_ready(self) -> None:
         """Start the local server on demand and verify the configured model exists."""
+        self._raise_if_cancelled()
+        if time.monotonic() < self._ollama_ready_until:
+            return
         ollama = self.settings.get("models", {}).get("ollama", {})
         base_url = str(ollama.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
         model = str(ollama.get("model", "qwen2.5-coder:3b"))
@@ -489,6 +501,7 @@ class BotRuntime:
                 f"FileBot's model '{model}' is not installed in Ollama. Run "
                 f"`ollama pull {model}` and try again."
             )
+        self._ollama_ready_until = time.monotonic() + _OLLAMA_READY_CACHE_SECONDS
 
     @staticmethod
     def _ollama_tags(base_url: str) -> dict[str, Any]:
@@ -551,6 +564,9 @@ class BotRuntime:
             try:
                 return self._answer_text(self._run_agent(intent, make_request()))
             except RuntimeError as exc:
+                # Force a fresh local-server/model probe on the next turn after
+                # inference errors, while keeping quick back-to-back turns fast.
+                self._ollama_ready_until = 0.0
                 if attempt or "exceeds the local context budget" not in str(exc).casefold():
                     raise
                 previous_session = self._session

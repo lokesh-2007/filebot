@@ -173,7 +173,7 @@ class PopoverCard(QWidget):
         self._stream_flush_timer.setInterval(30)
         self._stream_flush_timer.timeout.connect(self._flush_stream_deltas)
         self._request_timer = QTimer(self)
-        self._request_timer.setInterval(10_000)
+        self._request_timer.setInterval(3_000)
         self._request_timer.timeout.connect(self._show_wait_feedback)
         if loading:
             self.set_loading(True)
@@ -349,10 +349,8 @@ class PopoverCard(QWidget):
     def _show_wait_feedback(self) -> None:
         """Show elapsed time while waiting for the first streamed model token."""
         self._request_elapsed_seconds += self._request_timer.interval() // 1000
-        status = (
-            f"Loading the local model or preparing a reply — {self._request_elapsed_seconds} seconds elapsed. "
-            "The request is still active. Press Stop to cancel."
-        )
+        status = (f"Still working on your reply — {self._request_elapsed_seconds} seconds. "
+                  "Press Stop to cancel.")
         if self._current_chat_prompt is not None:
             self._render_chat_transcript(status)
         else:

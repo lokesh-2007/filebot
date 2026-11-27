@@ -16,6 +16,12 @@ still being validated.
 - An in-flight local model request can be cancelled from the popover without
   blocking Qt's UI thread; cancellation covers Ollama preflight/startup and a
   configured deadline bounds a stalled model turn.
+- Successful local Ollama/model readiness checks are cached for 90 seconds, so
+  quick follow-up turns skip the `/api/tags` HTTP probe; inference errors
+  invalidate the cache. First-token wait feedback appears every three seconds,
+  and model prompts ask for natural, concise, result-first replies. This reduces
+  preflight and perceived wait overhead; no new hardware inference benchmark was
+  run, so token-generation latency is not claimed to have improved.
 - Retrieval and Nanobot initialize on wake; Ollama starts on demand for model
   requests and unloads according to the configured keep-alive/lifecycle policy.
 - Background queue indexing runs in Windows background CPU and I/O priority,

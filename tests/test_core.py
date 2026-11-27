@@ -417,6 +417,31 @@ class DatabaseTests(unittest.TestCase):
                 runtime._check_ollama_ready()
         tags.assert_not_called()
 
+    def test_ollama_readiness_is_cached_for_quick_follow_up_turns(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "test-model",
+        }}}, self.db, object())
+        with patch("agent.bot_runtime.time.monotonic", return_value=100), \
+                patch.object(runtime, "_ollama_tags", return_value={
+                    "models": [{"name": "test-model"}],
+                }) as tags:
+            runtime._check_ollama_ready()
+            runtime._check_ollama_ready()
+        self.assertEqual(tags.call_count, 1)
+
+    def test_ollama_readiness_cache_expires(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "test-model",
+        }}}, self.db, object())
+        runtime._ollama_ready_until = 100
+        with patch("agent.bot_runtime.time.monotonic", side_effect=[101, 101, 192, 192]), \
+                patch.object(runtime, "_ollama_tags", return_value={
+                    "models": [{"name": "test-model"}],
+                }) as tags:
+            runtime._check_ollama_ready()
+            runtime._check_ollama_ready()
+        self.assertEqual(tags.call_count, 2)
+
     def test_stop_during_ollama_probe_does_not_autostart_server(self) -> None:
         runtime = BotRuntime({"index": {}, "models": {"ollama": {
             "base_url": "http://127.0.0.1:11434", "auto_start": True,
