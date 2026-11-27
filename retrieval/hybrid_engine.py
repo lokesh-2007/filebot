@@ -53,8 +53,10 @@ class HybridEngine:
             try:
                 import bm25s
                 self._bm25 = bm25s.BM25()
-                self._tokens = bm25s.tokenize(self._corpus, stopwords="en")
-                self._bm25.index(self._tokens)
+                self._tokens = bm25s.tokenize(
+                    self._corpus, stopwords="en", show_progress=False,
+                )
+                self._bm25.index(self._tokens, show_progress=False)
             except Exception:
                 log.exception("BM25 index unavailable; lexical SQLite fallback will be used")
                 self._bm25 = self._tokens = None
@@ -174,8 +176,12 @@ class HybridEngine:
         known_ids = {str(row["chunk_id"]) for row in rows}
         if self._bm25 is not None and self._tokens is not None and self._rows:
             try:
-                tokens = __import__("bm25s").tokenize([query], stopwords="en")
-                indexes, scores = self._bm25.retrieve(tokens, k=min(take, len(self._rows)))
+                tokens = __import__("bm25s").tokenize(
+                    [query], stopwords="en", show_progress=False,
+                )
+                indexes, scores = self._bm25.retrieve(
+                    tokens, k=min(take, len(self._rows)), show_progress=False,
+                )
                 for index, score in zip(indexes[0], scores[0]):
                     if int(index) >= 0 and float(score) > 0.0:
                         row = self._rows[int(index)]

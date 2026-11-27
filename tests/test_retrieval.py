@@ -133,6 +133,70 @@ class ParserResourceLimitTests(unittest.TestCase):
 
 
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_bm25_tokenization_disables_console_progress_for_pythonw(self) -> None:
+        calls = []
+
+        class FakeBM25:
+            def index(self, tokens, **kwargs):
+                self.tokens = tokens
+                self.index_kwargs = kwargs
+
+            def retrieve(self, _tokens, **kwargs):
+                self.retrieve_kwargs = kwargs
+                return [[0]], [[1.0]]
+
+        module = ModuleType("bm25s")
+        module.BM25 = FakeBM25
+
+        def tokenize(texts, **kwargs):
+            calls.append((texts, kwargs))
+            return ["tokenized"]
+
+        module.tokenize = tokenize
+
+        class FakeDatabase:
+            def all_chunks(self):
+                return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
+                         "snippet": "matching terms", "page_or_line": None, "heading": None}]
+
+            def search_lexical(self, *_args):
+                return []
+
+        engine = HybridEngine({}, FakeDatabase())
+        with patch.dict(sys.modules, {"bm25s": module}):
+            engine._refresh_bm25()
+            engine._embedder = SimpleNamespace(
+                query_embed=lambda _query: [SimpleNamespace(tolist=lambda: [0.0])],
+            )
+            engine._collection = SimpleNamespace(query=lambda **_kwargs: {"ids": [[]]})
+            result = engine.search("matching terms")
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(not kwargs["show_progress"] for _, kwargs in calls))
+        self.assertFalse(engine._bm25.index_kwargs["show_progress"])
+        self.assertFalse(engine._bm25.retrieve_kwargs["show_progress"])
+        self.assertIsNotNone(engine._bm25)
+        self.assertEqual(result[0]["path"], "doc.txt")
+
+    def test_bm25_build_and_query_work_without_stdout(self) -> None:
+        class FakeDatabase:
+            def all_chunks(self):
+                return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
+                         "snippet": "matching terms", "page_or_line": None, "heading": None}]
+
+        engine = HybridEngine({}, FakeDatabase())
+        engine._embedder = SimpleNamespace(
+            query_embed=lambda _query: [SimpleNamespace(tolist=lambda: [0.0])],
+        )
+        engine._collection = SimpleNamespace(query=lambda **_kwargs: {"ids": [[]]})
+
+        with patch("sys.stdout", None):
+            engine._refresh_bm25()
+            result = engine._search_locked("matching terms", 1)
+
+        self.assertIsNotNone(engine._bm25)
+        self.assertEqual(result[0]["path"], "doc.txt")
+
     def test_edited_glossary_and_feedback_on_representative_corpus(self) -> None:
         """Exercise retrieval controls end to end without downloading models."""
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:

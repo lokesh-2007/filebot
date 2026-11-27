@@ -41,6 +41,9 @@ still being validated.
 - Nanobot skill summaries are explicitly excluded from FileBot prompts because
   FileBot does not expose Nanobot's skill reader. This avoids a context-budget
   rejection caused by treating `"*"` as a literal disabled skill name.
+- BM25 tokenization, indexing, and retrieval now suppress terminal progress
+  bars. This prevents headless `pythonw` runs from failing on detached stdout
+  and silently losing BM25 ranking.
 - A local Ollama probe now verifies a real streamed response using an isolated
   temporary database and no user corpus. On the development Windows machine
   (`qwen2.5-coder:3b`), a cold run measured 23.687 s to first text / 23.834 s
