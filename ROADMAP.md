@@ -42,8 +42,8 @@ still being validated.
 - Chat stream deltas are coalesced into 30 ms UI updates, avoiding a Qt text
   widget mutation for every model fragment while keeping partial text visible.
 - The popover now labels itself as a local assistant and retains the current
-  session's user/assistant turns while a new answer streams. This transcript is
-  in-memory only; conversation persistence across app restarts is not supported.
+  session's user/assistant turns while a new answer streams. Up to 50 completed
+  turns are now stored locally and restored after sleep/wake or app restart.
 - Nanobot skill summaries are explicitly excluded from FileBot prompts because
   FileBot does not expose Nanobot's skill reader. This avoids a context-budget
   rejection caused by treating `"*"` as a literal disabled skill name.

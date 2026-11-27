@@ -142,7 +142,9 @@ class PopoverCard(QWidget):
         self._command_queue: list[str] = []
         self._request_elapsed_seconds = 0
         self._chat_has_deltas = False
+        self._chat_session_key = str(getattr(runtime, "_session", "filebot:desktop"))
         self._chat_turns: list[tuple[str, str]] = []
+        self._load_chat_turns()
         self._current_chat_prompt: str | None = None
         self._current_stream_text = ""
         self._pending_stream_deltas: list[str] = []
@@ -155,6 +157,8 @@ class PopoverCard(QWidget):
         self._request_timer.timeout.connect(self._show_wait_feedback)
         if loading:
             self.set_loading(True)
+        elif self._chat_turns:
+            self._render_chat_transcript()
         self._refresh_pending()
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
@@ -238,16 +242,25 @@ class PopoverCard(QWidget):
         self.ask_button.setEnabled(not loading)
         self.stop_button.setEnabled(False)
         if loading:
-            self.answer.setPlainText("Loading the local search index… You can search or ask as soon as FileBot is ready.")
+            message = "Loading the local search index… You can search or ask as soon as FileBot is ready."
+            if self._chat_turns:
+                self._render_chat_transcript(message)
+            else:
+                self.answer.setPlainText(message)
 
     def set_runtime(self, engine: Any, runtime: Any) -> None:
         """Attach wake-loaded services to the already visible popover."""
         self.engine, self.runtime = engine, runtime
+        self._chat_session_key = str(getattr(runtime, "_session", "filebot:desktop"))
+        self._load_chat_turns()
         runtime_settings = getattr(runtime, "settings", {})
         roots = runtime_settings.get("index", {}).get("roots") if isinstance(runtime_settings, dict) else None
         self.file_ops = FileOpsTool(self.db, roots=roots)
         self.set_loading(False)
-        self.answer.setPlainText("Ready. Search local files or ask a question.")
+        if self._chat_turns:
+            self._render_chat_transcript()
+        else:
+            self.answer.setPlainText("Ready. Search local files or ask a question.")
         self._refresh_pending()
 
     def submit(self, force_search: bool = False) -> None:
@@ -344,6 +357,28 @@ class PopoverCard(QWidget):
         self.answer.setTextCursor(cursor)
         self.answer.ensureCursorVisible()
 
+    def _load_chat_turns(self) -> None:
+        """Restore recent completed turns from the local conversation store."""
+        load = getattr(self.db, "recent_chat_turns", None)
+        if not callable(load):
+            return
+        try:
+            turns = load(self._chat_session_key, limit=50)
+            self._chat_turns = [(str(user), str(reply)) for user, reply in turns][-50:]
+        except Exception:
+            log.exception("Could not load the local chat transcript")
+
+    def _remember_chat_turn(self, user_text: str, assistant_text: str, *, persist: bool = True) -> None:
+        """Keep the visible transcript in sync with the bounded local store."""
+        save = getattr(self.db, "record_chat_turn", None)
+        if persist and callable(save):
+            try:
+                save(self._chat_session_key, user_text, assistant_text, retain=50)
+            except Exception:
+                log.exception("Could not save the local chat transcript")
+        self._chat_turns.append((user_text, assistant_text))
+        self._chat_turns = self._chat_turns[-50:]
+
     def _received(self, result: object, error: str) -> None:
         self._request_timer.stop()
         self._stream_flush_timer.stop()
@@ -354,7 +389,7 @@ class PopoverCard(QWidget):
         self.ask_button.setEnabled(True)
         if error:
             if self._current_chat_prompt is not None:
-                self._chat_turns.append((self._current_chat_prompt, error))
+                self._remember_chat_turn(self._current_chat_prompt, error, persist=False)
                 self._current_chat_prompt = None
                 self._current_stream_text = ""
                 self._render_chat_transcript()
@@ -386,7 +421,7 @@ class PopoverCard(QWidget):
         else:
             final_text = str(result)
             if self._current_chat_prompt is not None:
-                self._chat_turns.append((self._current_chat_prompt, final_text))
+                self._remember_chat_turn(self._current_chat_prompt, final_text)
                 self._current_chat_prompt = None
                 self._current_stream_text = ""
                 self._render_chat_transcript()

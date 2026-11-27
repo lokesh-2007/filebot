@@ -2,13 +2,37 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from agent.bot_runtime import BotRuntime
+from storage.db import Database
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChatContextTests(unittest.TestCase):
+    def test_chat_history_is_session_scoped_bounded_and_persistent(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            database_path = Path(directory) / "state.sqlite3"
+            database = Database(database_path)
+            database.initialize()
+            database.record_chat_turn("desktop", "first", "one", retain=2)
+            database.record_chat_turn("desktop", "second", "two", retain=2)
+            database.record_chat_turn("desktop", "third", "three", retain=2)
+            database.record_chat_turn("other", "separate", "session", retain=2)
+
+            reopened = Database(database_path)
+            self.assertEqual(
+                reopened.recent_chat_turns("desktop", limit=50),
+                [("second", "two"), ("third", "three")],
+            )
+            self.assertEqual(
+                reopened.recent_chat_turns("other", limit=50),
+                [("separate", "session")],
+            )
+
     def test_ordinary_chat_turn_includes_local_excerpts_for_grounded_answers(self) -> None:
         hits = [{
             "path": r"C:\Docs\Warranty.txt",

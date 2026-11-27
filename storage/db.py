@@ -76,6 +76,15 @@ CREATE TABLE IF NOT EXISTS app_state (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_turns (
+    turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL,
+    user_text TEXT NOT NULL,
+    assistant_text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_key, turn_id);
+
 CREATE TABLE IF NOT EXISTS cmd_audit (
     proposal_id TEXT PRIMARY KEY,
     session_key TEXT NOT NULL DEFAULT '',
@@ -289,6 +298,40 @@ class Database:
                 (normalized,),
             ).fetchone()
         return (int(row[0]), int(row[1]), int(row[2])) if row is not None else (0, 0, 0)
+
+    def recent_chat_turns(self, session_key: str, limit: int = 50) -> list[tuple[str, str]]:
+        """Load a bounded local transcript in chronological order."""
+        if not session_key or limit < 1:
+            raise ValueError("a session key and positive chat history limit are required")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT user_text, assistant_text FROM chat_turns
+                   WHERE session_key=? ORDER BY turn_id DESC LIMIT ?""",
+                (session_key, limit),
+            ).fetchall()
+        return [(str(row[0]), str(row[1])) for row in reversed(rows)]
+
+    def record_chat_turn(
+        self, session_key: str, user_text: str, assistant_text: str, *, retain: int = 50,
+    ) -> None:
+        """Save one completed local conversation turn and prune older turns."""
+        if not session_key or not user_text.strip() or not assistant_text.strip():
+            raise ValueError("chat turns require a session key, user text, and assistant text")
+        if retain < 1:
+            raise ValueError("retain must be at least 1")
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO chat_turns(session_key,user_text,assistant_text,created_at)
+                   VALUES(?,?,?,?)""",
+                (session_key, user_text, assistant_text, datetime.now(timezone.utc).isoformat()),
+            )
+            connection.execute(
+                """DELETE FROM chat_turns WHERE session_key=? AND turn_id NOT IN (
+                       SELECT turn_id FROM chat_turns WHERE session_key=?
+                       ORDER BY turn_id DESC LIMIT ?
+                   )""",
+                (session_key, session_key, retain),
+            )
 
     def set_glossary_entries(self, entries: dict[str, str]) -> None:
         """Persist validated shorthand expansions without removing user entries."""

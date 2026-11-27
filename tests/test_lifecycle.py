@@ -471,6 +471,25 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("FileBot:\nPartial answer complete", card.answer.toPlainText())
         card.close()
 
+    def test_completed_chat_turn_survives_popover_recreation(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.cwd() / "tests") as directory:
+            database = Database(Path(directory) / "state.sqlite3")
+            database.initialize()
+            card = PopoverCard(engine=None, runtime=None, db=database)
+            card._current_chat_prompt = "What is in the report?"
+            card._received("The report lists three milestones.", "")
+            self.assertEqual(
+                database.recent_chat_turns("filebot:desktop"),
+                [("What is in the report?", "The report lists three milestones.")],
+            )
+            card.close()
+
+            reopened = PopoverCard(engine=None, runtime=None, db=database)
+            transcript = reopened.answer.toPlainText()
+            self.assertIn("You:\nWhat is in the report?", transcript)
+            self.assertIn("FileBot:\nThe report lists three milestones.", transcript)
+            reopened.close()
+
     def test_chat_stream_batches_widget_updates_and_flushes_final_text(self) -> None:
         class FakeDatabase:
             def pending_commands(self):

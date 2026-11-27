@@ -84,7 +84,7 @@ personal corpus or a live Ollama server.
 
 ## Data and privacy
 
-The file index, audit log, vectors, and Nanobot workspace stay on this machine. Ollama inference uses the configured local endpoint. Initial dependency, Ollama model, and embedding model downloads require network access. File contents are not sent to a remote model by FileBot's configured Ollama route.
+The file index, audit log, vectors, conversation history (up to 50 completed turns), and Nanobot workspace stay on this machine. Ollama inference uses the configured local endpoint. Initial dependency, Ollama model, and embedding model downloads require network access. File contents are not sent to a remote model by FileBot's configured Ollama route.
 
 ## Current scope
 
