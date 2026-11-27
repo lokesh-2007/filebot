@@ -140,6 +140,12 @@ still being validated.
   tests, and three targeted Ollama runtime tests. The local runner used Python
   3.13 (outside the supported release matrix), and this was focused coverage,
   not a full-suite or release-matrix acceptance run.
+- The complete `tests/test_core.py` module remains unverified in this restricted
+  session: its third test blocks before entering the test body while Python
+  3.13 creates a Proactor event loop. The captured stack is in
+  `socket.accept` → `asyncio.proactor_events._make_self_pipe`, consistent with
+  the session's denied socket operations; an isolated UI/model integration run
+  on the supported Windows test environment is still required.
 - Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket
