@@ -1,4 +1,4 @@
-"""File-open scope checks for configured roots and the active index."""
+"""File access checks for configured roots and the active index."""
 from __future__ import annotations
 
 import tempfile
@@ -13,6 +13,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FileOpsTests(unittest.TestCase):
+    def test_lists_only_configured_folders_and_bounds_the_result(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            base = Path(directory)
+            root = base / "allowed"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (root / "Reports").mkdir()
+            for index in range(4):
+                (root / f"note-{index}.txt").write_text("local", encoding="utf-8")
+            (outside / "private.txt").write_text("private", encoding="utf-8")
+
+            tool = FileOpsTool(db=None, roots=[str(root)])
+            result = tool.list_directory(str(root), limit=2)
+
+            self.assertIn("Reports/", result)
+            self.assertIn("additional items omitted", result)
+            self.assertNotIn("private.txt", result)
+            with self.assertRaisesRegex(PermissionError, "outside FileBot"):
+                tool.list_directory(str(outside))
+
     def test_reads_bounded_content_only_from_indexed_files_inside_roots(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             base = Path(directory)

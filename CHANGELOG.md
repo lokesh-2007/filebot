@@ -6,6 +6,8 @@
   answers, including direct requests such as “read report.txt”. Enforce current
   index membership and configured-root containment; file mutation stays out of
   the Python app and CMD execution remains behind explicit approval.
+- Add bounded folder listings for configured roots; skip links that resolve
+  outside those roots and keep the list output capped for small model contexts.
 - Keep SQLite lexical retrieval available when vector dependencies or queries
   fail, and cap model search results and prompt evidence to protect local model
   context budgets.

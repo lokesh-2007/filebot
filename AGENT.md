@@ -19,7 +19,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `retrieval/index_worker.py` — drains durable file changes, hashes and parses files, retries failures, and refreshes the index.
 - `retrieval/hybrid_engine.py` — lazy FastEmbed/ONNX embeddings, ChromaDB, BM25, and reciprocal-rank fusion.
 - `agent/bot_runtime.py` — lazy Nanobot/Ollama runtime, fast intent routing, and the narrow FileBot tool registry.
-- `agent/tools/` — `search_files`, bounded reading/opening of indexed files, and command proposals.
+- `agent/tools/` — `search_files`, bounded listing/reading/opening within configured roots, and command proposals.
 - `executor/policy_engine.py`, `executor/cmd_runner.py` — default-deny command classification and the sole approved-command execution path.
 - `filebot_config.py`, `config/settings.yaml` — settings validation, defaults, and Windows-friendly path expansion.
 - `config/cmd_policy.yaml` — blocked/read-only/gated command patterns. Treat policy edits as security-sensitive.
@@ -34,7 +34,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 1. Do not import FastEmbed, BM25, ChromaDB, or Nanobot from the sleeping entry-point path. Keep those imports behind wake/activation code; `tests/test_startup.py` checks this.
 2. Index and open only files contained within configured roots. Resolve paths before checking containment; fail closed for invalid paths and symlinks escaping a root.
 3. Keep parsing and indexing bounded by the configured file, extracted-text, DOCX archive, chunk, and embedding-batch limits. Preserve dirty-queue retries when indexing fails or a file changes mid-read.
-4. Do not add Nanobot shell, filesystem-write, web, or other broad tools. FileBot's agent tools are restricted per turn: chat gets bounded indexed search/read, search turns get local search, open/read requests get the corresponding safe file access, and CMD requests get proposal only.
+4. Do not add Nanobot shell, filesystem-write, web, or other broad tools. FileBot's agent tools are restricted per turn: chat gets bounded indexed search/read and configured-root listing, search turns get local search, open/read/list requests get corresponding safe file access, and CMD requests get proposal only.
 5. Never execute a proposal from the model response. `propose_cmd` only classifies and stages an audit row. The user must explicitly approve in the UI; `CommandRunner` rechecks current policy and claims an approved row exactly once.
 6. Keep `config/cmd_policy.yaml` default-deny. Block shell chaining, redirection, expansion, installer/privilege/disk operations, and any command not deliberately allowlisted. A `read_only` classification still goes through the visible approval flow.
 7. Keep inference on the configured local Ollama endpoint. Network is only expected for initial dependency/model downloads unless the user changes this behavior.

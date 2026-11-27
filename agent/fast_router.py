@@ -20,10 +20,25 @@ class FastRouter:
         r"|\b(?:open|view)\s+[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
         re.I,
     )
-    _read_file = re.compile(r"\b(?:read|summari[sz]e)\b", re.I)
+    _read_file = re.compile(
+        r"\b(?:read|summari[sz]e)\b|\bwhat(?:'s| is)\s+in\b.{0,100}"
+        r"\.(?:txt|md|pdf|docx)\b",
+        re.I,
+    )
+    _list_folder = re.compile(
+        r"\blist(?:\s+(?:files|contents))?(?:\s+(?:in|of))?\b"
+        r"|\bwhat(?:'s| is)\s+in\b|\bcontents\s+of\b",
+        re.I,
+    )
     _open_target = re.compile(
         r"\b(?:open|view|show|read)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?[\"']?"
         r"([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
+        re.I,
+    )
+    _list_target = re.compile(
+        r"\b(?:list(?:\s+(?:files|contents))?(?:\s+(?:in|of))?|"
+        r"what(?:'s| is)\s+in|contents\s+of)\s*(?:the\s+|my\s+)?"
+        r"(?P<path>[^?!]+?)\s*[?.!]*$",
         re.I,
     )
 
@@ -33,6 +48,15 @@ class FastRouter:
         if match is None:
             return None
         return match.group(1).strip().rstrip(".,;") or None
+
+    def list_target(self, prompt: str) -> str | None:
+        """Extract an optional folder name from a natural-language listing request."""
+        match = self._list_target.search(prompt.strip())
+        if match is None:
+            return None
+        target = match.group("path").strip().strip('"').strip("'").rstrip(".,;?!")
+        target = re.sub(r"^(?:files|contents)\s+(?:in|of)\s+", "", target, flags=re.I)
+        return target or None
 
     def route(self, prompt: str) -> str:
         """Return cmd, search, open, or chat; CMD intent only proposes for approval."""
@@ -44,4 +68,6 @@ class FastRouter:
             return "read"
         if self._open_file.search(prompt):
             return "open"
+        if self._list_folder.search(prompt):
+            return "list"
         return "chat"

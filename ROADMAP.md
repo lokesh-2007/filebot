@@ -37,6 +37,9 @@ still being validated.
   current-index checks and cap returned text at 12,000 characters. File changes
   remain unsupported by the Python app; CMD remains proposal-only until the
   explicit UI approval action is taken.
+- Chat can list a requested configured folder without model latency; the listing
+  enforces root containment, skips links outside allowed roots, and bounds both
+  the scan and displayed names.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

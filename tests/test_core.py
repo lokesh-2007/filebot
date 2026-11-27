@@ -387,7 +387,9 @@ class DatabaseTests(unittest.TestCase):
 
         class FakeLoop:
             def __init__(self) -> None:
-                self.tools = Registry(["search_files", "open_file", "read_file", "propose_cmd"])
+                self.tools = Registry([
+                    "search_files", "open_file", "read_file", "list_files", "propose_cmd",
+                ])
 
         class FakeBot:
             def __init__(self) -> None:
@@ -410,10 +412,11 @@ class DatabaseTests(unittest.TestCase):
         runtime.bot = bot
         full_registry = bot._loop.tools
         runtime._tool_registries = {
-            "chat": Registry(["read_file", "search_files"]),
+            "chat": Registry(["list_files", "read_file", "search_files"]),
             "search": Registry(["search_files"]),
             "open": Registry(["open_file", "read_file", "search_files"]),
-            "read": Registry(["read_file", "search_files"]),
+            "read": Registry(["list_files", "read_file", "search_files"]),
+            "list": Registry(["list_files"]),
             "cmd": Registry(["propose_cmd"]),
         }
         def run_immediate(coroutine, *, timeout=None):
@@ -431,6 +434,8 @@ class DatabaseTests(unittest.TestCase):
                 self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
                 self.assertEqual(runtime.ask("Read this report"), "Hello")
                 self.assertEqual(runtime.ask("Run command whoami"), "Hello")
+                result = runtime._run_agent("list", bot.run("Show me folder contents"))
+                self.assertEqual(runtime._answer_text(result), "Hello")
         finally:
             runtime._model_used = False
             # close() uses the same immediate fake runner for aclose().
@@ -438,9 +443,10 @@ class DatabaseTests(unittest.TestCase):
                 runtime.close()
 
         self.assertEqual(bot.seen_tools, [
-            ["read_file", "search_files"], ["search_files"],
+            ["list_files", "read_file", "search_files"], ["search_files"],
             ["open_file", "read_file", "search_files"],
-            ["read_file", "search_files"], ["propose_cmd"],
+            ["list_files", "read_file", "search_files"], ["propose_cmd"],
+            ["list_files"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
 
@@ -490,10 +496,28 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("Milestone one is complete.", answer)
         check_ollama.assert_not_called()
 
+    def test_explicit_folder_listing_stays_inside_configured_roots_and_skips_model(self) -> None:
+        (self.root / "Reports").mkdir()
+        (self.root / "Reports" / "summary.txt").write_text("summary", encoding="utf-8")
+
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return []
+
+        runtime = BotRuntime({"index": {"roots": [str(self.root)]}}, self.db, FakeEngine())
+        with patch.object(runtime, "_check_ollama_ready") as check_ollama:
+            answer = runtime.ask_streaming("What's in Reports?", lambda _delta: None)
+
+        self.assertIn("summary.txt", answer)
+        self.assertIn(str((self.root / "Reports").resolve()), answer)
+        check_ollama.assert_not_called()
+
     def test_fast_router_extracts_quoted_and_bare_file_targets(self) -> None:
         router = FastRouter()
         self.assertEqual(router.open_target('Open "Project Notes.pdf" please'), "Project Notes.pdf")
         self.assertEqual(router.open_target('Read "Project Notes.txt" please'), "Project Notes.txt")
+        self.assertEqual(router.list_target("What's in Downloads?"), "Downloads")
+        self.assertEqual(router.list_target("List files in Reports"), "Reports")
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
 

@@ -8,7 +8,7 @@ from storage.db import Database
 
 
 class FileOpsTool:
-    """Read or open files only after verifying roots and current index membership."""
+    """List, read, or open files only within configured roots and the current index."""
     name = "open_file"
     description = "Open an existing local file in its default Windows application."
 
@@ -66,3 +66,76 @@ class FileOpsTool:
             raise ValueError("File has no readable indexed text")
         suffix = "\n\n[Excerpt shortened to fit FileBot's local read limit.]" if remaining <= 0 else ""
         return f"File: {file}\n{content}{suffix}"
+
+    def list_directory(self, path: str | None = None, *, limit: int = 100) -> str:
+        """List one configured folder without following links outside its roots."""
+        if self.roots is None or not self.roots:
+            raise PermissionError("Folder listing requires configured FileBot roots")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        requested = (path or "").strip().strip('"').strip("'")
+        if not requested:
+            folder = self.roots[0].resolve(strict=True)
+        else:
+            candidate = Path(requested).expanduser()
+            if candidate.is_absolute():
+                folder = candidate.resolve(strict=True)
+            else:
+                root_match = next(
+                    (root for root in self.roots if root.name.casefold() == requested.casefold()),
+                    None,
+                )
+                folder = root_match.resolve(strict=True) if root_match else None
+                if folder is None:
+                    for root in self.roots:
+                        possible = (root / candidate)
+                        try:
+                            if possible.is_dir():
+                                folder = possible.resolve(strict=True)
+                                break
+                        except (OSError, RuntimeError):
+                            continue
+                if folder is None:
+                    raise FileNotFoundError(f"No configured folder matches '{requested}'")
+        if not folder.is_dir():
+            raise ValueError("The selected path is not a folder")
+        if not path_is_within_roots(folder, self.roots):
+            raise PermissionError("Folder is outside FileBot's configured roots")
+        entries = []
+        skipped_links = 0
+        scanned = 0
+        scan_limit = 1000
+        scan_capped = False
+        for item in folder.iterdir():
+            if scanned >= scan_limit:
+                scan_capped = True
+                break
+            scanned += 1
+            try:
+                resolved = item.resolve(strict=True)
+                if not path_is_within_roots(resolved, self.roots):
+                    skipped_links += 1
+                    continue
+                is_dir = resolved.is_dir()
+                name = "".join(character if character.isprintable() else " " for character in item.name)
+                entries.append((not is_dir, name.casefold(), f"{name}{'/' if is_dir else ''}"))
+            except (OSError, RuntimeError):
+                continue
+        entries.sort()
+        visible: list[str] = []
+        used_chars = 0
+        for entry in entries[:limit]:
+            line = entry[2][:255]
+            if used_chars + len(line) + 1 > 6000:
+                break
+            visible.append(line)
+            used_chars += len(line) + 1
+        if not visible:
+            listing = "This folder is empty."
+        else:
+            listing = "\n".join(visible)
+            if len(entries) > len(visible) or scan_capped:
+                listing += "\n… additional items omitted from this bounded listing."
+        if skipped_links:
+            listing += f"\n{skipped_links} link(s) outside configured folders hidden."
+        return f"Folder: {str(folder)[:1024]}\n{listing}"
