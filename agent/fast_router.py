@@ -5,7 +5,7 @@ import re
 
 
 class FastRouter:
-    """Route obvious file searches and command requests without an LLM."""
+    """Route obvious file actions and command requests without extra model work."""
     _cmd = re.compile(
         r"\b(?:use\s+cmd|command prompt|terminal command)\b"
         r"|\b(?:run|execute)\s+(?:the\s+|this\s+|a\s+)?"
@@ -20,14 +20,15 @@ class FastRouter:
         r"|\b(?:open|view)\s+[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
         re.I,
     )
+    _read_file = re.compile(r"\b(?:read|summari[sz]e)\b", re.I)
     _open_target = re.compile(
-        r"\b(?:open|view|show)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?[\"']?"
+        r"\b(?:open|view|show|read)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?[\"']?"
         r"([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
         re.I,
     )
 
     def open_target(self, prompt: str) -> str | None:
-        """Extract an explicitly named file for safe, model-free opening."""
+        """Extract an explicitly named file for safe, model-free read or open."""
         match = self._open_target.search(prompt.strip())
         if match is None:
             return None
@@ -39,6 +40,8 @@ class FastRouter:
             return "cmd"
         if self._search.search(prompt):
             return "search"
+        if self._read_file.search(prompt):
+            return "read"
         if self._open_file.search(prompt):
             return "open"
         return "chat"

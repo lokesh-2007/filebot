@@ -387,7 +387,7 @@ class DatabaseTests(unittest.TestCase):
 
         class FakeLoop:
             def __init__(self) -> None:
-                self.tools = Registry(["search_files", "open_file", "propose_cmd"])
+                self.tools = Registry(["search_files", "open_file", "read_file", "propose_cmd"])
 
         class FakeBot:
             def __init__(self) -> None:
@@ -410,23 +410,37 @@ class DatabaseTests(unittest.TestCase):
         runtime.bot = bot
         full_registry = bot._loop.tools
         runtime._tool_registries = {
-            "chat": Registry(["search_files"]),
+            "chat": Registry(["read_file", "search_files"]),
             "search": Registry(["search_files"]),
-            "open": Registry(["open_file"]),
+            "open": Registry(["open_file", "read_file", "search_files"]),
+            "read": Registry(["read_file", "search_files"]),
             "cmd": Registry(["propose_cmd"]),
         }
-        runtime._start_async_loop()
+        def run_immediate(coroutine, *, timeout=None):
+            del timeout
+            try:
+                coroutine.send(None)
+            except StopIteration as completed:
+                return completed.value
+            raise AssertionError("the immediate fake bot unexpectedly awaited work")
+
         try:
-            self.assertEqual(runtime.ask("Say hello"), "Hello")
-            self.assertEqual(runtime.ask("Find the meeting notes"), [])
-            self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
-            self.assertEqual(runtime.ask("Run command whoami"), "Hello")
+            with patch.object(runtime, "_run_async", side_effect=run_immediate):
+                self.assertEqual(runtime.ask("Say hello"), "Hello")
+                self.assertEqual(runtime.ask("Find the meeting notes"), "Hello")
+                self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
+                self.assertEqual(runtime.ask("Read this report"), "Hello")
+                self.assertEqual(runtime.ask("Run command whoami"), "Hello")
         finally:
             runtime._model_used = False
-            runtime.close()
+            # close() uses the same immediate fake runner for aclose().
+            with patch.object(runtime, "_run_async", side_effect=run_immediate):
+                runtime.close()
 
         self.assertEqual(bot.seen_tools, [
-            ["search_files"], ["open_file", "search_files"], ["propose_cmd"],
+            ["read_file", "search_files"], ["search_files"],
+            ["open_file", "read_file", "search_files"],
+            ["read_file", "search_files"], ["propose_cmd"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
 
@@ -456,9 +470,30 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(signal["open_count"], 1)
 
+    def test_explicit_indexed_file_read_bypasses_model_and_returns_indexed_content(self) -> None:
+        file_path = self.root / "Project Notes.txt"
+        file_path.write_text("Milestone one is complete.", encoding="utf-8")
+        self.db.replace_file(
+            file_path, content_hash="read-hash", size=file_path.stat().st_size,
+            mtime=file_path.stat().st_mtime,
+            chunks=[{"text": "Milestone one is complete.", "page_or_line": "line 1"}],
+        )
+
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return []
+
+        runtime = BotRuntime({"index": {"roots": [str(self.root)]}}, self.db, FakeEngine())
+        with patch.object(runtime, "_check_ollama_ready") as check_ollama:
+            answer = runtime.ask_streaming('Read "Project Notes.txt"', lambda _delta: None)
+
+        self.assertIn("Milestone one is complete.", answer)
+        check_ollama.assert_not_called()
+
     def test_fast_router_extracts_quoted_and_bare_file_targets(self) -> None:
         router = FastRouter()
         self.assertEqual(router.open_target('Open "Project Notes.pdf" please'), "Project Notes.pdf")
+        self.assertEqual(router.open_target('Read "Project Notes.txt" please'), "Project Notes.txt")
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
 
@@ -724,6 +759,7 @@ class PolicyAndParserTests(unittest.TestCase):
         self.assertEqual(router.route("Run the tests"), "cmd")
         self.assertEqual(router.route("Find the meeting notes"), "search")
         self.assertEqual(router.route("Open the PDF document"), "open")
+        self.assertEqual(router.route('Read "Project Notes.txt"'), "read")
         self.assertEqual(router.route("Explain this concept"), "chat")
 
 

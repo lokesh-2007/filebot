@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Add bounded, read-only access to indexed file excerpts for conversational
+  answers, including direct requests such as “read report.txt”. Enforce current
+  index membership and configured-root containment; file mutation stays out of
+  the Python app and CMD execution remains behind explicit approval.
+- Keep SQLite lexical retrieval available when vector dependencies or queries
+  fail, and cap model search results and prompt evidence to protect local model
+  context budgets.
+- Persist the last 50 local chat turns so the visible transcript stays aligned
+  with the assistant session across sleep/wake and app restarts.
+
 ## Product setup and shutdown polish 0.6.14 — 2026-11-27
 
 - Add a right-click avatar menu with an explicit Quit FileBot action so users

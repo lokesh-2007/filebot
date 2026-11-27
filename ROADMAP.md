@@ -32,6 +32,11 @@ still being validated.
   characters and model tool results at ten excerpts to protect the configured
   local-model context window. Explicitly named indexed-file opens still bypass
   Ollama; file opening rechecks index membership and configured-root containment.
+- Ask can now read a bounded excerpt from a specifically named indexed file or
+  call a per-intent read-only file tool. Reads enforce the configured-root and
+  current-index checks and cap returned text at 12,000 characters. File changes
+  remain unsupported by the Python app; CMD remains proposal-only until the
+  explicit UI approval action is taken.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

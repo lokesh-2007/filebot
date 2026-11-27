@@ -484,6 +484,22 @@ class Database:
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
                 WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""))
 
+    def indexed_file_chunks(
+        self, path: str | Path, limit: int = 16, chars_per_chunk: int = 1200,
+    ) -> list[sqlite3.Row]:
+        """Return bounded stored chunks for one currently indexed path."""
+        if limit < 1 or not 1 <= chars_per_chunk <= 12_000:
+            raise ValueError("chunk limit or excerpt size is outside supported bounds")
+        normalized = str(Path(path).expanduser().resolve())
+        with self.connect() as connection:
+            return list(connection.execute(
+                """SELECT substr(c.snippet,1,?) AS snippet,c.page_or_line,c.heading FROM chunks c
+                   JOIN files f USING(file_id)
+                   WHERE f.path=? AND f.status='indexed'
+                   ORDER BY c.chunk_index LIMIT ?""",
+                (chars_per_chunk, normalized, limit),
+            ))
+
     def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
         """Fallback lexical search using SQLite LIKE when BM25 is not active."""
         terms = [f"%{term}%" for term in query.split() if term]
