@@ -34,8 +34,10 @@ still being validated.
 
 ## Remaining product requirements
 
-- Validate the relevance controls and edited glossary against a representative
-  local corpus.
+- Run relevance controls against a representative personal corpus. A
+  deterministic SQLite lexical fixture now checks edited glossary expansion
+  and same-session feedback ranking, but semantic ranking on a real local
+  corpus remains unvalidated.
 - Add end-to-end Windows tests for hotkey/avatar wake, direct open, streamed
   chat, command approval/rejection, cancellation, and idle unload.
 - Measure cold startup, wake-to-search, wake-to-first-token, peak and dormant

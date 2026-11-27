@@ -1,5 +1,14 @@
 # Changelog
 
+## Retrieval relevance checks 0.6.9 — 2026-11-27
+
+- Add an offline SQLite corpus regression for an edited glossary alias and
+  competing retrieval results with open/feedback signals.
+- Refresh cached lexical rows immediately after Helpful/Not helpful feedback so
+  the persisted vote affects subsequent searches in the same awake session.
+- The fixture validates lexical behavior only; semantic relevance against a
+  representative personal corpus and real embeddings remains unmeasured.
+
 ## Bounded and cancellable chat requests 0.6.8 — 2026-11-27
 
 - Make Stop cancel Ollama preflight and server-start waiting as well as an

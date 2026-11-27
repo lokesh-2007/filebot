@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from retrieval.hybrid_engine import HybridEngine
 from retrieval.parsers import parse_file
+from storage.db import Database
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -132,6 +133,57 @@ class ParserResourceLimitTests(unittest.TestCase):
 
 
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_edited_glossary_and_feedback_on_representative_corpus(self) -> None:
+        """Exercise retrieval controls end to end without downloading models."""
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            root = Path(directory)
+            db = Database(root / "filebot.sqlite3")
+            db.initialize()
+            documents = [
+                ("api-reference.md", "Product specification for the REST API and auth headers."),
+                ("retention-policy.md", "Records retention policy: keep audit logs for 30 days."),
+                ("retention-policy-draft.md", "Draft retention policy for archived records."),
+                ("incident-runbook.md", "Incident recovery steps for a failed nightly backup."),
+                ("budget-notes.md", "Quarterly budget forecast and vendor costs."),
+            ]
+            for name, content in documents:
+                db.replace_file(root / name, content_hash=name, size=len(content), mtime=1.0,
+                                chunks=[{"text": content}])
+
+            # Model outputs are intentionally empty: this verifies the shipped
+            # SQLite lexical fallback and keeps the check deterministic/offline.
+            engine = HybridEngine({}, db)
+            engine._refresh_bm25()
+            engine._embedder = SimpleNamespace(
+                query_embed=lambda _query: [SimpleNamespace(tolist=lambda: [0.0])],
+            )
+            engine._collection = SimpleNamespace(query=lambda **_kwargs: {"ids": [[]]})
+
+            initial = engine.search("pbrief")
+            self.assertEqual(initial, [])
+            db.replace_glossary_entries({"pbrief": "product specification"})
+            edited = engine.search("pbrief")
+            self.assertEqual(Path(edited[0]["path"]).name, "api-reference.md")
+            self.assertEqual(len(edited), 1)
+
+            before = engine.search("retention policy")
+            self.assertEqual(Path(before[0]["path"]).name, "retention-policy.md")
+            db.record_file_feedback(root / "retention-policy-draft.md", "up")
+            engine.refresh_lexical_index()
+            after = engine.search("retention policy")
+            self.assertEqual(Path(after[0]["path"]).name, "retention-policy-draft.md")
+
+            short_id_corpus = [
+                {"chunk_id": "id", "file_name": "config.md", "path": "config.md",
+                 "snippet": "Set API timeout to 30 seconds.", "page_or_line": None,
+                 "heading": None, "open_count": 0, "upvotes": 0, "downvotes": 0},
+                {"chunk_id": "word", "file_name": "notes.md", "path": "notes.md",
+                 "snippet": "This word appears inside rapidity.", "page_or_line": None,
+                 "heading": None, "open_count": 0, "upvotes": 0, "downvotes": 0},
+            ]
+            exact = HybridEngine.reciprocal_rank_fusion(["id", "word"], [], short_id_corpus, 2)
+            self.assertEqual(exact[0]["path"], "config.md")
+
     def test_engine_expands_database_glossary_before_retrieval(self) -> None:
         class FakeDatabase:
             def expand_glossary(self, query):

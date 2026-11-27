@@ -247,6 +247,30 @@ class LifecycleTests(unittest.TestCase):
                              "technical specification application programming interface")
             card.close()
 
+    def test_saved_feedback_refreshes_retrieval_signals(self) -> None:
+        class FakeEngine:
+            refreshed = False
+
+            def refresh_lexical_index(self) -> None:
+                self.refreshed = True
+
+        class FakeDatabase:
+            def record_file_feedback(self, _path: str, _vote: str) -> bool:
+                return True
+
+        engine = FakeEngine()
+        card = PopoverCard(engine=engine, runtime=None, db=FakeDatabase())
+        item = QListWidgetItem("selected.md")
+        item.setData(Qt.ItemDataRole.UserRole, "C:/docs/selected.md")
+        card.results.addItem(item)
+        card.results.setCurrentItem(item)
+
+        card._record_feedback("up")
+
+        self.assertTrue(engine.refreshed)
+        self.assertIn("Feedback saved", card.answer.toPlainText())
+        card.close()
+
     def test_popover_displays_chat_text_before_the_turn_finishes(self) -> None:
         class FakeDatabase:
             def pending_commands(self):

@@ -363,6 +363,9 @@ class PopoverCard(QWidget):
             return
         try:
             if self.db.record_file_feedback(str(path), vote):
+                refresh = getattr(self.engine, "refresh_lexical_index", None)
+                if callable(refresh):
+                    refresh()
                 label = "Helpful" if vote == "up" else "Not helpful"
                 self.answer.setPlainText(f"Feedback saved as “{label}”; it will influence later searches.")
             else:
