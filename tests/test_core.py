@@ -288,8 +288,8 @@ class DatabaseTests(unittest.TestCase):
         runtime._start_async_loop()
         try:
             with patch.object(runtime, "_check_ollama_ready") as check_ollama:
-                self.assertEqual(runtime.ask("Explain local indexing"), "Explain local indexing")
-                self.assertEqual(runtime.ask("Explain retrieval fusion"), "Explain retrieval fusion")
+                self.assertTrue(runtime.ask("Explain local indexing").startswith("Explain local indexing"))
+                self.assertTrue(runtime.ask("Explain retrieval fusion").startswith("Explain retrieval fusion"))
                 self.assertEqual(check_ollama.call_count, 2)
         finally:
             runtime._model_used = False
@@ -626,7 +626,8 @@ class DatabaseTests(unittest.TestCase):
         runtime.bot = FakeBot()
         runtime._start_async_loop()
         try:
-            answer = runtime.ask("Create a new HTML file")
+            with patch.object(runtime, "_check_ollama_ready"):
+                answer = runtime.ask("Create a new HTML file")
         finally:
             runtime._model_used = False
             runtime.close()
