@@ -135,6 +135,11 @@ still being validated.
   Ollama chat now returns a streamed response; hardware keyboard, startup
   cancellation, wake-to-idle, and repeatable multi-machine performance checks
   remain open.
+- This Windows session passed 29 lifecycle/Qt tests, 14 file-operation,
+  tool-bridge, startup, and watcher tests, 42 benchmark/chat/config/retrieval
+  tests, and three targeted Ollama runtime tests. The local runner used Python
+  3.13 (outside the supported release matrix), and this was focused coverage,
+  not a full-suite or release-matrix acceptance run.
 - Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket
