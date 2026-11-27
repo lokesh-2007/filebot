@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a validated soft memory budget for managed Ollama. After a turn completes,
+  FileBot requests model unload at 90% of the configured combined resident
+  working-set budget; it does not interrupt the request or stop Ollama, and it
+  leaves external Ollama services alone.
 - Add a synthetic-corpus benchmark for cold/warm chat, wake/index duration,
   FileBot/Ollama private commit and working set, Ollama model/VRAM estimates,
   and total-system RAM. Add chat stage timings and never save prompt/answer text.

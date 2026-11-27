@@ -88,6 +88,12 @@ def load_settings(path: str | Path) -> dict[str, Any]:
         raise RuntimeError("FileBot setting 'runtime.hotkey' must be a non-empty string")
     _validate_number(settings["runtime"].get("idle_unload_seconds", 120),
                      "runtime.idle_unload_seconds", minimum=1, integer=True)
+    memory_budget = _validate_number(
+        settings["runtime"].get("managed_model_memory_budget_mib", 4096),
+        "runtime.managed_model_memory_budget_mib", minimum=1024, integer=True,
+    )
+    if memory_budget > 16384:
+        raise RuntimeError("FileBot setting 'runtime.managed_model_memory_budget_mib' must be at most 16384")
     models = settings["models"]
     for section in ("ollama", "embeddings", "vector_store"):
         if not isinstance(models.get(section), dict):

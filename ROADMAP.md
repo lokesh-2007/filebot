@@ -31,6 +31,13 @@ still being validated.
   and use SQLite lexical fallback. The 3.5–4 GB product target is not yet a
   measured or OS-enforced hard limit, especially when Ollama is already running
   outside FileBot.
+- A configurable `runtime.managed_model_memory_budget_mib` soft budget defaults
+  to 4096 MiB. After a completed chat turn, FileBot samples its and its own
+  Ollama server's working sets and requests model unload at 90% of that budget;
+  it does not kill the server, interrupt the answer, or change external Ollama.
+  Shared pages may be counted twice. This is a conservative post-turn response,
+  not an enforced cap; Windows threshold behavior and recovery latency need
+  validation on supported hardware.
 - `scripts/benchmark_chat.py` now samples FileBot and Ollama private commit and
   working set separately, Ollama loaded-model/VRAM estimates, whole-system RAM,
   wake/index duration, and cold/warm first-token and completion timing over a

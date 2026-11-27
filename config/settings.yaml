@@ -87,4 +87,6 @@ models:
 runtime:
   idle_unload_seconds: 120
   request_timeout_seconds: 180
+  # Soft budget: FileBot may unload its own Ollama model after a completed turn at 90%.
+  managed_model_memory_budget_mib: 4096
   hotkey: "<ctrl>+<alt>+<space>"

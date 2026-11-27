@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from agent.fast_router import FastRouter
 from agent.bot_runtime import (BotRuntime, _ensure_filebot_instructions,
@@ -515,6 +515,37 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(env["OLLAMA_NUM_PARALLEL"], "1")
         self.assertEqual(env["OLLAMA_CONTEXT_LENGTH"], "3072")
         self.assertEqual(env["OLLAMA_KEEP_ALIVE"], "1m")
+
+    def test_memory_pressure_unloads_only_filebot_managed_model_after_turn(self) -> None:
+        runtime = BotRuntime({
+            "models": {"ollama": {"base_url": "http://127.0.0.1:11434",
+                                   "model": "test-model", "keep_alive": "2m"}},
+            "runtime": {"managed_model_memory_budget_mib": 4096},
+        }, self.db, object())
+        runtime._ollama_process = SimpleNamespace(poll=lambda: None)
+        runtime._model_used = True
+        client = SimpleNamespace(generate=Mock(), close=Mock())
+        with patch("agent.bot_runtime.process_memory_snapshot_mib", return_value={
+            "filebot_working_set_mib": 400,
+            "ollama_working_set_mib": 3400,
+            "ollama_process_count": 2,
+        }), patch.dict("sys.modules", {"ollama": SimpleNamespace(Client=lambda **_kwargs: client)}):
+            self.assertTrue(runtime._maybe_unload_managed_model_for_memory())
+        client.generate.assert_called_once_with(
+            model="test-model", prompt="", stream=False, keep_alive="0",
+        )
+        client.close.assert_called_once()
+        self.assertFalse(runtime._model_used)
+
+    def test_memory_pressure_never_unloads_external_ollama_server(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "test-model",
+        }}}, self.db, object())
+        runtime._model_used = True
+        with patch("agent.bot_runtime.process_memory_snapshot_mib") as snapshot:
+            self.assertFalse(runtime._maybe_unload_managed_model_for_memory())
+        snapshot.assert_not_called()
+        self.assertTrue(runtime._model_used)
 
     def test_plain_chat_does_not_wait_for_background_file_indexing(self) -> None:
         class FakeBot:

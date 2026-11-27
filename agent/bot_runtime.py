@@ -19,6 +19,7 @@ from agent.ollama_tool_bridge import install_ollama_tool_bridge
 from agent.tools.cmd_proposal_tool import ProposeCmdTool, ProposePowerShellTool
 from agent.tools.file_ops_tool import FileOpsTool
 from agent.tools.search_tool import SearchFilesTool
+from daemon.metrics import process_memory_snapshot_mib
 from filebot_config import expand_config_path, path_is_within_roots
 from executor.policy_engine import PolicyEngine
 from executor.cmd_runner import CommandRunner
@@ -864,10 +865,13 @@ class BotRuntime:
         # A failed HTTP request may still have loaded Ollama's model. Always
         # request idle unload when this awake session is closed.
         self._model_used = True
-        return self._run_agent_with_context_recovery(
-            intent,
-            lambda: self.bot.run(prompt, session_key=self._session, channel="filebot"),
-        )
+        try:
+            return self._run_agent_with_context_recovery(
+                intent,
+                lambda: self.bot.run(prompt, session_key=self._session, channel="filebot"),
+            )
+        finally:
+            self._maybe_unload_managed_model_for_memory()
 
     def ask_streaming(self, prompt: str, on_delta: Any) -> str | list[dict[str, Any]]:
         """Stream a conversational answer grounded in relevant indexed files."""
@@ -947,10 +951,60 @@ class BotRuntime:
                 self._last_request_timings["generation_seconds"],
                 self._last_request_timings["total_seconds"],
             )
+            self._maybe_unload_managed_model_for_memory()
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return indexed matches immediately; queue draining stays in background."""
         return self.engine.search(query, 20)
+
+    def _unload_model(self, *, keep_alive: str = "0") -> None:
+        """Set Ollama's model keep-alive without stopping its server."""
+        client = None
+        try:
+            from ollama import Client
+            ollama = self.settings["models"]["ollama"]
+            client = Client(host=ollama["base_url"])
+            client.generate(model=ollama["model"], prompt="", stream=False, keep_alive=keep_alive)
+        except Exception:
+            log.debug("Ollama model unload request failed", exc_info=True)
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    log.debug("Could not close the Ollama HTTP client cleanly", exc_info=True)
+            self._model_used = False
+
+    def _maybe_unload_managed_model_for_memory(self) -> bool:
+        """Release a managed model after a completed turn near the soft RAM budget.
+
+        The check uses sampled resident working sets, which can conservatively
+        double-count shared pages. It never stops Ollama or interrupts a turn,
+        and it does not alter an Ollama server FileBot did not start.
+        """
+        process = self._ollama_process
+        if (not self._model_used or process is None or not callable(getattr(process, "poll", None))
+                or process.poll() is not None):
+            return False
+        snapshot = process_memory_snapshot_mib()
+        if snapshot is None or snapshot.get("ollama_process_count", 0) <= 0:
+            return False
+        runtime = self.settings.get("runtime", {})
+        budget = float(runtime.get("managed_model_memory_budget_mib", 4096))
+        stack_working_set = (
+            snapshot.get("filebot_working_set_mib", 0)
+            + snapshot.get("ollama_working_set_mib", 0)
+        )
+        threshold = budget * 0.90
+        if stack_working_set < threshold:
+            return False
+        log.warning(
+            "Managed FileBot/Ollama working sets reached %.1f MiB (soft threshold %.1f MiB); "
+            "requesting model unload after the completed turn",
+            stack_working_set, threshold,
+        )
+        self._unload_model()
+        return True
 
     def close(self) -> None:
         """Close Nanobot resources and release all references."""
@@ -964,21 +1018,6 @@ class BotRuntime:
         finally:
             self._stop_async_loop()
         self._tool_registries.clear()
-        client = None
-        try:
-            if not self._model_used:
-                return
-            from ollama import Client
-            ollama = self.settings["models"]["ollama"]
-            client = Client(host=ollama["base_url"])
-            client.generate(model=ollama["model"], prompt="", stream=False,
-                            keep_alive=ollama.get("keep_alive", "0"))
-        except Exception:
-            log.debug("Ollama idle unload request failed", exc_info=True)
-        finally:
-            if client is not None:
-                try:
-                    client.close()
-                except Exception:
-                    log.debug("Could not close the Ollama HTTP client cleanly", exc_info=True)
-            self._model_used = False
+        if self._model_used:
+            keep_alive = str(self.settings.get("models", {}).get("ollama", {}).get("keep_alive", "0"))
+            self._unload_model(keep_alive=keep_alive)

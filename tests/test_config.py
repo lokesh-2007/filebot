@@ -119,6 +119,19 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "request_timeout_seconds.*600"):
                 load_settings(path)
 
+    def test_managed_model_memory_budget_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["runtime"]["managed_model_memory_budget_mib"] = 512
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "managed_model_memory_budget_mib.*integer"):
+                load_settings(path)
+            settings["runtime"]["managed_model_memory_budget_mib"] = 20_000
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "managed_model_memory_budget_mib.*16384"):
+                load_settings(path)
+
 
 if __name__ == "__main__":
     unittest.main()
