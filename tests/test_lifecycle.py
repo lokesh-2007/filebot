@@ -317,8 +317,9 @@ class LifecycleTests(unittest.TestCase):
         card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
         card._show_wait_feedback()
 
-        self.assertIn("10 seconds", card.answer.toPlainText())
-        self.assertIn("The request is still active", card.answer.toPlainText())
+        self.assertIn("3 seconds", card.answer.toPlainText())
+        self.assertIn("Still working on your reply", card.answer.toPlainText())
+        self.assertEqual(card._request_timer.interval(), 3_000)
         card.close()
 
     def test_chat_can_be_cancelled_without_blocking_the_popover(self) -> None:

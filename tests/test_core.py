@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import asyncio
+import json
 from io import BytesIO
 import os
 import re
@@ -16,7 +17,8 @@ from types import SimpleNamespace
 from unittest.mock import call, patch
 
 from agent.fast_router import FastRouter
-from agent.bot_runtime import BotRuntime, _ensure_filebot_instructions, _nanobot_config_payload
+from agent.bot_runtime import (BotRuntime, _ensure_filebot_instructions,
+                               _is_unexecuted_tool_text, _nanobot_config_payload)
 from agent.tools.cmd_proposal_tool import ProposePowerShellTool
 from executor.cmd_runner import CommandRunner, _read_output_tail
 from executor.policy_engine import PolicyEngine
@@ -381,6 +383,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(defaults["max_tokens"], 192)
         self.assertEqual(defaults["context_window_tokens"], 3072)
 
+    def test_model_cannot_claim_a_filebot_action_from_plain_tool_json(self) -> None:
+        names = ("search_files", "open_file", "read_file", "list_files",
+                 "create_file", "propose_cmd", "propose_powershell")
+        for name in names:
+            with self.subTest(tool=name):
+                content = json.dumps({"name": name, "arguments": {}})
+                self.assertTrue(_is_unexecuted_tool_text(content))
+        self.assertFalse(_is_unexecuted_tool_text('{"name":"unknown","arguments":{}}'))
+
+    def test_non_runtime_inference_error_invalidates_readiness_cache(self) -> None:
+        runtime = BotRuntime({}, self.db, object())
+        runtime._ollama_ready_until = 500
+
+        def fail_agent(_intent, _coroutine):
+            raise ValueError("local provider failed")
+
+        with patch.object(runtime, "_run_agent", side_effect=fail_agent):
+            with self.assertRaisesRegex(ValueError, "local provider failed"):
+                runtime._run_agent_with_context_recovery("chat", lambda: None)
+        self.assertEqual(runtime._ollama_ready_until, 0.0)
+
     def test_bot_runtime_request_timeout_cancels_the_pending_coroutine(self) -> None:
         class Loop:
             def is_running(self):
@@ -456,6 +479,18 @@ class DatabaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "request was cancelled"):
                 runtime._check_ollama_ready()
         start.assert_not_called()
+
+    def test_ollama_retries_health_probe_if_its_launch_exits(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "base_url": "http://127.0.0.1:11434", "model": "test-model",
+            "auto_start": True, "startup_timeout_seconds": 2,
+        }}}, self.db, object())
+        runtime._ollama_process = SimpleNamespace(poll=lambda: 1, returncode=1)
+        with patch.object(runtime, "_ollama_tags", side_effect=[
+            OSError("connection refused"), {"models": [{"name": "test-model"}]},
+        ]) as tags, patch.object(runtime, "_start_ollama"):
+            runtime._check_ollama_ready()
+        self.assertEqual(tags.call_count, 2)
 
     def test_plain_chat_does_not_wait_for_background_file_indexing(self) -> None:
         class FakeBot:

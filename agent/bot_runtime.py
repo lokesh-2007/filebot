@@ -53,6 +53,10 @@ _CHAT_STYLE_GUIDANCE = (
     "report the result and exact path. Ask one focused question only when needed. Avoid filler, "
     "canned greetings, and repeating the user's request."
 )
+_FILEBOT_TOOL_NAMES = frozenset({
+    "search_files", "open_file", "read_file", "list_files", "create_file",
+    "propose_cmd", "propose_powershell",
+})
 
 
 def _ensure_filebot_instructions(workspace: Path) -> None:
@@ -97,9 +101,9 @@ def _is_unexecuted_tool_text(content: str) -> bool:
         payload = json.loads(value)
     except (TypeError, ValueError):
         return False
-    return isinstance(payload, dict) and payload.get("name") in {
-        "search_files", "open_file", "propose_cmd"
-    } and isinstance(payload.get("arguments"), dict)
+    return (isinstance(payload, dict)
+            and payload.get("name") in _FILEBOT_TOOL_NAMES
+            and isinstance(payload.get("arguments"), dict))
 
 
 def _disable_nanobot_skills(context: Any) -> int:
@@ -348,10 +352,7 @@ class BotRuntime:
         log.debug("Excluded %d unavailable Nanobot skill summaries from prompts", disabled_skill_count)
         # ToolLoader also discovers Nanobot defaults. Enforce an allowlist after
         # construction so disabled settings or future upstream tools cannot widen access.
-        allowed_tools = {
-            "search_files", "open_file", "read_file", "list_files", "create_file",
-            "propose_cmd", "propose_powershell",
-        }
+        allowed_tools = set(_FILEBOT_TOOL_NAMES)
         for name in tuple(loop.tools.tool_names):
             if name not in allowed_tools:
                 loop.tools.unregister(name)
@@ -475,10 +476,19 @@ class BotRuntime:
             while time.monotonic() < deadline:
                 self._raise_if_cancelled()
                 if self._ollama_process is not None and self._ollama_process.poll() is not None:
-                    raise RuntimeError(
-                        "Ollama exited while FileBot was waiting for its local server. "
-                        "Open Ollama from the Start menu and try again."
-                    )
+                    # Another Ollama instance may have won the port while this
+                    # launch exited. Do one final probe before reporting failure.
+                    try:
+                        payload = self._ollama_tags(base_url)
+                        break
+                    except (OSError, ValueError, UnicodeDecodeError) as exc:
+                        last_error = exc
+                        exit_code = self._ollama_process.returncode
+                        raise RuntimeError(
+                            "Ollama exited while FileBot was waiting for its local server "
+                            f"(exit code {exit_code}). Check that Ollama is running and "
+                            f"that {base_url} is reachable; details: {last_error}"
+                        ) from exc
                 try:
                     payload = self._ollama_tags(base_url)
                     break
@@ -563,11 +573,15 @@ class BotRuntime:
         for attempt in range(2):
             try:
                 return self._answer_text(self._run_agent(intent, make_request()))
-            except RuntimeError as exc:
+            except Exception as exc:
                 # Force a fresh local-server/model probe on the next turn after
                 # inference errors, while keeping quick back-to-back turns fast.
                 self._ollama_ready_until = 0.0
-                if attempt or "exceeds the local context budget" not in str(exc).casefold():
+                is_context_overflow = (
+                    isinstance(exc, RuntimeError)
+                    and "exceeds the local context budget" in str(exc).casefold()
+                )
+                if attempt or not is_context_overflow:
                     raise
                 previous_session = self._session
                 self._session = f"filebot:desktop:{uuid4().hex[:12]}"
