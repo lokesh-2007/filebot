@@ -1,6 +1,6 @@
 # FileBot 0.6.14
 
-FileBot is a local Windows file assistant with conversational chat, indexed-file search/open, and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
+FileBot is a local Windows file assistant with conversational chat, indexed-file search/open, and an explicit approval step for gated CMD commands. Its floating avatar is a shaded robot that reflects sleep, active, and pending-approval states. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, BM25, and Nanobot are loaded after wake and released on idle timeout.
 
 See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
 See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.

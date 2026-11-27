@@ -186,6 +186,28 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(avatar.label.accessibleName(), "FileBot status")
         avatar.close()
 
+    def test_avatar_paints_robot_and_reacts_to_runtime_status(self) -> None:
+        avatar = AvatarBubble()
+        self.assertEqual(avatar.size().width(), 82)
+        self.assertEqual(avatar.size().height(), 82)
+        avatar.show()
+        self.app.processEvents()
+        resting = avatar.grab().toImage()
+        self.assertEqual(resting.pixelColor(0, 0).alpha(), 0)
+        self.assertGreater(resting.pixelColor(41, 41).alpha(), 0)
+
+        avatar.set_status("active")
+        self.app.processEvents()
+        active = avatar.grab().toImage()
+        self.assertNotEqual(resting, active)
+        self.assertEqual(avatar.toolTip(), "FileBot: active")
+
+        avatar.set_status("cmd_pending")
+        approval = avatar.grab().toImage()
+        self.assertNotEqual(active, approval)
+        self.assertEqual(avatar.toolTip(), "FileBot: cmd pending")
+        avatar.close()
+
     def test_popover_stays_inside_active_screen_work_area(self) -> None:
         avatar = AvatarBubble()
         screen = avatar.screen()

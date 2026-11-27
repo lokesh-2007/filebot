@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Replace the letter badge with a crisp, shaded robot avatar that shows idle,
+  active, and CMD-approval states while retaining mouse, keyboard-accessible,
+  and quit behavior.
 - Add bounded, read-only access to indexed file excerpts for conversational
   answers, including direct requests such as “read report.txt”. Enforce current
   index membership and configured-root containment; file mutation stays out of

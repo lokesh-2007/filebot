@@ -49,8 +49,9 @@ still being validated.
 - Windows Qt integration tests now cover avatar and hotkey-bridge wake,
   selected-file open and feedback persistence, CMD audit approval/rejection,
   and idle resource unload. Existing Qt tests cover streamed chat and cancel.
-- Right-clicking the avatar now exposes a clean Quit action for controlled
-  shutdown before a source-based update.
+- A shaded robot avatar reflects idle, active, and pending-CMD-approval states;
+  clicking, dragging, accessibility naming, and the right-click Quit action are
+  covered by Qt lifecycle tests.
 - Chat stream deltas are coalesced into 30 ms UI updates, avoiding a Qt text
   widget mutation for every model fragment while keeping partial text visible.
 - The popover now labels itself as a local assistant and retains the current
