@@ -139,6 +139,7 @@ class BotRuntime:
             15, int(settings.get("runtime", {}).get("request_timeout_seconds", 180)),
         ))
         self._ollama_ready_until = 0.0
+        self._last_request_timings: dict[str, float] = {}
         self._turn_lock = threading.Lock()
         self._tool_registries: dict[str, Any] = {}
         self._ollama_process: subprocess.Popen[bytes] | None = None
@@ -381,10 +382,13 @@ class BotRuntime:
 
     def _prepare_prompt(self, prompt: str, *, include_retrieval: bool = True) -> tuple[str, str]:
         """Apply local routing and add only the context needed for one turn."""
+        self._last_request_timings = {}
         self._raise_if_cancelled()
         intent = self.router.route(prompt)
         if isinstance(self.settings.get("models"), dict):
+            preflight_started = time.perf_counter()
             self._check_ollama_ready()
+            self._last_request_timings["preflight_seconds"] = time.perf_counter() - preflight_started
         self._raise_if_cancelled()
         self._activate()
         self._raise_if_cancelled()
@@ -396,6 +400,7 @@ class BotRuntime:
                       f"If the request is supported by the policy, call {tool_name} with one command and a short reason. "
                       "The application requires a separate explicit UI approval before execution. User request: " + prompt)
         if include_retrieval and intent in {"chat", "search", "open", "read", "create"}:
+            retrieval_started = time.perf_counter()
             try:
                 hits = self.engine.search(prompt, 8)
             except Exception:
@@ -414,6 +419,7 @@ class BotRuntime:
                     "Answer general questions normally; do not claim that a file supports the answer."
                 )
             prompt += context
+            self._last_request_timings["retrieval_seconds"] = time.perf_counter() - retrieval_started
         prompt += _CHAT_STYLE_GUIDANCE
         return intent, prompt
 
@@ -865,6 +871,7 @@ class BotRuntime:
 
     def ask_streaming(self, prompt: str, on_delta: Any) -> str | list[dict[str, Any]]:
         """Stream a conversational answer grounded in relevant indexed files."""
+        request_started = time.perf_counter()
         intent = self.router.route(prompt)
         if intent == "delete":
             return self._stage_explicit_delete(prompt)
@@ -893,29 +900,53 @@ class BotRuntime:
                 return result
         if intent == "list":
             return self._list_explicit_folder(prompt)
-        intent, prompt = self._prepare_prompt(
-            prompt, include_retrieval=summary_content is None,
-        )
+        intent, prompt = self._prepare_prompt(prompt, include_retrieval=summary_content is None)
         prompt = self._attach_summary_excerpt(prompt, summary_content)
         self._model_used = True
+        generation_started = time.perf_counter()
+        first_delta_seconds: float | None = None
+
+        def forward_delta(delta: str) -> None:
+            nonlocal first_delta_seconds
+            if delta and first_delta_seconds is None:
+                first_delta_seconds = time.perf_counter() - request_started
+            on_delta(delta)
 
         async def collect() -> Any:
             if not callable(getattr(self.bot, "stream", None)):
                 result = await self.bot.run(prompt, session_key=self._session, channel="filebot")
                 if getattr(result, "content", None):
-                    on_delta(str(result.content))
+                    forward_delta(str(result.content))
                 return result
             result = None
             async for event in self.bot.stream(prompt, session_key=self._session, channel="filebot"):
                 if getattr(event, "type", None) == "text.delta":
                     delta = str(getattr(event, "delta", "") or "")
                     if delta:
-                        on_delta(delta)
+                        forward_delta(delta)
                 elif getattr(event, "type", None) == "run.completed":
                     result = getattr(event, "result", None)
             return result
 
-        return self._run_agent_with_context_recovery(intent, collect)
+        try:
+            result = self._run_agent_with_context_recovery(intent, collect)
+            return result
+        finally:
+            finished = time.perf_counter()
+            self._last_request_timings.update({
+                "time_to_first_token_seconds": first_delta_seconds or 0.0,
+                "generation_seconds": finished - generation_started,
+                "total_seconds": finished - request_started,
+            })
+            log.info(
+                "FileBot chat timing preflight=%.3fs retrieval=%.3fs first_token=%.3fs "
+                "generation=%.3fs total=%.3fs",
+                self._last_request_timings.get("preflight_seconds", 0.0),
+                self._last_request_timings.get("retrieval_seconds", 0.0),
+                self._last_request_timings["time_to_first_token_seconds"],
+                self._last_request_timings["generation_seconds"],
+                self._last_request_timings["total_seconds"],
+            )
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return indexed matches immediately; queue draining stays in background."""

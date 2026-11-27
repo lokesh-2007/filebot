@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a synthetic-corpus benchmark for cold/warm chat, wake/index duration,
+  FileBot/Ollama private commit and working set, Ollama model/VRAM estimates,
+  and total-system RAM. Add chat stage timings and never save prompt/answer text.
 - Set conservative model concurrency and context limits for FileBot-managed
   Ollama, reduce default embedding/index batches, and reject larger memory
   settings that exceed the supported Python profile. Cap the in-memory BM25

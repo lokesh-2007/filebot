@@ -31,6 +31,15 @@ still being validated.
   and use SQLite lexical fallback. The 3.5–4 GB product target is not yet a
   measured or OS-enforced hard limit, especially when Ollama is already running
   outside FileBot.
+- `scripts/benchmark_chat.py` now samples FileBot and Ollama private commit and
+  working set separately, Ollama loaded-model/VRAM estimates, whole-system RAM,
+  wake/index duration, and cold/warm first-token and completion timing over a
+  synthetic corpus without saving prompt or response text. In the current
+  restricted Windows session, 25 synthetic 8 KiB files woke in 6.55 s and
+  indexed in 22.94 s; FileBot peaked at 350.49 MiB working set and 711.53 MiB
+  private commit. Ollama chat failed because Windows denied access to
+  `127.0.0.1:11434` (WinError 10013), so these figures exclude Ollama and do not
+  establish the product's 3.5–4 GB target or live latency.
 - Background queue indexing runs in Windows background CPU and I/O priority,
   with bounded work batches and polling between batches.
 - PDF, DOCX, Markdown, and text parsing feed FastEmbed/ONNX, ChromaDB, and BM25
@@ -100,9 +109,10 @@ still being validated.
   Ollama chat now returns a streamed response; hardware keyboard, startup
   cancellation, wake-to-idle, and repeatable multi-machine performance checks
   remain open.
-- Measure cold startup, wake-to-search, peak total system RAM, dormant working
-  set, and idle unload on supported Windows machines. The PDF's RAM and latency
-  targets remain goals, not measured claims.
+- Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
+  memory, dormant working set, and idle unload on supported Windows machines.
+  The current benchmark cannot reach Ollama under this environment's socket
+  policy; the PDF's RAM and latency targets remain goals, not measured claims.
 - Complete Rust feature parity, including local model start/recovery, hybrid
   retrieval feedback/glossary behavior, accessible result opening, and Windows
   UI verification. The core now starts/rechecks local Ollama on model use,

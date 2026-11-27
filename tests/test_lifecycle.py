@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QListWidgetI
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
-from daemon.metrics import process_working_set_mb
+from daemon.metrics import (process_memory_snapshot_mib, process_working_set_mb,
+                            system_memory_snapshot_mib)
 from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
 from ui.hotkey_bridge import HotkeyBridge
@@ -34,6 +35,18 @@ class LifecycleTests(unittest.TestCase):
     def test_working_set_metrics_degrade_cleanly_off_windows(self) -> None:
         with patch("daemon.metrics.os.name", "posix"):
             self.assertIsNone(process_working_set_mb())
+            self.assertIsNone(process_memory_snapshot_mib())
+            self.assertIsNone(system_memory_snapshot_mib())
+
+    @unittest.skipUnless(os.name == "nt", "Windows process and system memory counters")
+    def test_memory_snapshot_separates_filebot_ollama_and_system(self) -> None:
+        processes = process_memory_snapshot_mib()
+        system = system_memory_snapshot_mib()
+        self.assertIsNotNone(processes)
+        self.assertGreater(processes["filebot_working_set_mib"], 0)
+        self.assertIn("ollama_private_commit_mib", processes)
+        self.assertIsNotNone(system)
+        self.assertGreater(system["physical_total_mib"], system["physical_available_mib"])
 
     def test_nanobot_prompt_excludes_skills_filebot_cannot_use(self) -> None:
         class SkillLoader:

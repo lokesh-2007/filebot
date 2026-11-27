@@ -907,6 +907,8 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(chunks, ["Hello ", "from FileBot"])
         self.assertEqual(result, "Hello from FileBot")
+        self.assertIn("time_to_first_token_seconds", runtime._last_request_timings)
+        self.assertIn("generation_seconds", runtime._last_request_timings)
 
     def test_bot_runtime_replaces_pseudo_tool_json_with_clear_capability_message(self) -> None:
         class FakeBot:

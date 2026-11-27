@@ -292,9 +292,13 @@ class BoundedEmbeddingTests(unittest.TestCase):
         self.assertIsNotNone(engine._bm25)
         self.assertEqual(result[0]["path"], "doc.txt")
 
-    def test_bm25_build_and_query_work_without_stdout(self) -> None:
+    def test_lexical_fallback_works_without_stdout_when_bm25_is_unavailable(self) -> None:
         class FakeDatabase:
             def all_chunks(self, limit=None):
+                return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
+                         "snippet": "matching terms", "page_or_line": None, "heading": None}]
+
+            def search_lexical(self, *_args):
                 return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
                          "snippet": "matching terms", "page_or_line": None, "heading": None}]
 
@@ -308,7 +312,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
             engine._refresh_bm25()
             result = engine._search_locked("matching terms", 1)
 
-        self.assertIsNotNone(engine._bm25)
+        self.assertIsNone(engine._bm25)
         self.assertEqual(result[0]["path"], "doc.txt")
 
     def test_edited_glossary_and_feedback_on_representative_corpus(self) -> None:
