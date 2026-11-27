@@ -1,5 +1,13 @@
 # Changelog
 
+## Normalize Rust retrieval signal paths 0.6.13 — 2026-11-27
+
+- Normalize paths when reading ranking signals, matching the canonical path
+  handling used when recording opens and votes.
+- Split Rust coverage so open and vote contributions are checked independently.
+- Windows CI exposed this parity edge case; the local Rust test binary still
+  cannot link because ONNX Runtime binaries are unavailable in this environment.
+
 ## Windows desktop acceptance coverage 0.6.12 — 2026-11-27
 
 - Add Qt integration flows for avatar and hotkey-bridge wake, selected-file

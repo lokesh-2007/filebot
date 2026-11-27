@@ -524,11 +524,12 @@ impl Database {
 
     /// Bounded score adjustment shared by lexical and dense ranking paths.
     pub fn file_signal_boost(&self, path: &str) -> Result<f64, StorageError> {
+        let normalized = normalize_path(Path::new(path))?;
         let connection = self.connect()?;
         let signal = connection.query_row(
             "SELECT open_count,upvotes,downvotes FROM file_signals s JOIN files f USING(file_id) \
              WHERE f.path=?1 COLLATE NOCASE",
-            [path],
+            [normalized],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
         ).optional()?;
         let Some((opens, upvotes, downvotes)) = signal else {
@@ -1253,8 +1254,13 @@ mod tests {
         .unwrap();
         assert_eq!(db.file_signal_boost(&file.to_string_lossy()).unwrap(), 0.0);
         assert!(db.record_file_open(&file).unwrap());
+        let opened = db.file_signal_boost(&file.to_string_lossy()).unwrap();
+        assert!(opened > 0.0, "an open should add a positive ranking signal");
         assert!(db.record_file_feedback(&file, "up").unwrap());
-        assert!(db.file_signal_boost(&file.to_string_lossy()).unwrap() > 0.003);
+        assert!(
+            db.file_signal_boost(&file.to_string_lossy()).unwrap() > opened,
+            "a helpful vote should add to the open ranking signal"
+        );
         for _ in 0..20 {
             db.record_file_feedback(&file, "down").unwrap();
         }
