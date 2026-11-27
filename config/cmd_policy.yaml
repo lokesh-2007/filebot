@@ -1,0 +1,28 @@
+# Default-deny policy. Read-only and gated commands both require a visible
+# proposal and explicit approval in FileBot's UI before execution.
+version: 1
+default: blocked
+read_only:
+  # Entries are case-insensitive regular expressions matched against the full
+  # command string. Keep this allowlist narrow.
+  - '^\s*dir(?:\s|$).*$'
+  - '^\s*where\s+[^&|<>]+$'
+  - '^\s*whoami(?:\s+[^&|<>]+)?\s*$'
+  - '^\s*systeminfo\s*$'
+  - '^\s*ipconfig(?:\s+/all)?\s*$'
+  - '^\s*tasklist\s*$'
+gated:
+  # These are proposals only. FileBot still requires an explicit approval.
+  - '^\s*mkdir\s+.+$'
+  - '^\s*rmdir\s+.+$'
+  - '^\s*copy\s+.+$'
+  - '^\s*move\s+.+$'
+  - '^\s*ren(?:ame)?\s+.+$'
+  - '^\s*del(?:ete)?\s+.+$'
+blocked:
+  # Explicit blocks take precedence over the allowlists. These patterns guard
+  # shell chaining, variable expansion, installers, privilege changes and disk tools.
+  - '[&|<>]'
+  - '[%!]'
+  - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip)\b'
+  - '^\s*(?:del|erase|rmdir|rd)\s+.*(?:/s|/q|/f)'

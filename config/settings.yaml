@@ -1,0 +1,86 @@
+# FileBot configuration. Paths support ~ and environment-variable expansion.
+app:
+  name: FileBot
+  database_path: "~/.filebot/filebot.sqlite3"
+  log_level: INFO
+
+index:
+  roots:
+    - "~/Documents"
+  # Set true to also index every fixed local drive (Windows). Off by default.
+  scan_fixed_drives: false
+  include_extensions:
+    - .txt
+    - .md
+    - .pdf
+    - .docx
+    - .xlsx
+    - .pptx
+    - .csv
+    - .html
+    - .htm
+    - .json
+    - .py
+    - .js
+    - .ts
+    - .java
+    - .c
+    - .cpp
+    - .cs
+    - .go
+    - .rs
+  # Directory names skipped anywhere in the tree.
+  exclude_dirs:
+    - .git
+    - .venv
+    - venv
+    - node_modules
+    - site-packages
+    - __pycache__
+    - $RECYCLE.BIN
+    - System Volume Information
+  # fnmatch patterns matched (case-insensitively) against each directory name.
+  exclude_globs: []
+  # Absolute directory prefixes skipped; %VARIABLES% and ~ expand, and entries whose
+  # variable is undefined on this machine are ignored.
+  exclude_paths:
+    - "%SystemRoot%"
+    - "%ProgramFiles%"
+    - "%ProgramFiles(x86)%"
+    - "%ProgramData%"
+    - "~/AppData"
+  # Full rescan interval (cheap: unchanged files are skipped); 0 disables it.
+  rescan_seconds: 3600
+  # Debounced watcher events kept in memory before falling back to a rescan.
+  max_pending_events: 50000
+  max_file_bytes: 52428800
+  max_extracted_chars: 5000000
+  max_docx_uncompressed_bytes: 100000000
+  chunk_chars: 1200
+  chunk_overlap: 150
+  debounce_seconds: 1.0
+  background_batch_size: 10
+  background_poll_seconds: 1.0
+
+models:
+  llm:
+    # Bundled llama.cpp server and GGUF model. Relative paths resolve against the
+    # app folder; the server binds to 127.0.0.1 only and runs only while awake.
+    server_path: bin/llama-server.exe
+    model_path: models/qwen2.5-3b-instruct-q4_k_m.gguf
+    n_ctx: 8192
+    threads: null
+  embeddings:
+    model: BAAI/bge-small-en-v1.5
+    # Shipped ONNX folder (model_optimized.onnx + tokenizer files); loaded offline when
+    # present. Run scripts/fetch_models.py to create it in a source checkout.
+    model_dir: models/bge-small-en-v1.5-onnx
+    # Fallback download cache used only when model_dir is missing.
+    cache_dir: "~/.cache/filebot/fastembed"
+    batch_size: 64
+  vector_store:
+    path: "~/.filebot/chromadb"
+
+runtime:
+  idle_unload_seconds: 120
+  hotkey: "<ctrl>+<alt>+<space>"
