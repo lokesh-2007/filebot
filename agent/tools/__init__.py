@@ -1,1 +1,0 @@
-"""FileBot tool implementations."""
