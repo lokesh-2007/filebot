@@ -8,8 +8,9 @@ still being validated.
 
 ## Implemented in the supported Python app
 
-- Dormant Qt avatar, global hotkey, watchdog watcher, and SQLite WAL queue run
-  without importing the embedding or agent runtime at startup.
+- One-prompt resizable chat window, system tray, global hotkey, watchdog watcher,
+  and SQLite WAL queue run without importing the embedding or agent runtime at
+  startup.
 - Wake shows a loading popover immediately while retrieval initialization runs
   off the GUI thread; controls activate when the same card becomes ready.
 - An in-flight local model request can be cancelled from the popover without
@@ -35,9 +36,11 @@ still being validated.
 - Ask can now read a bounded excerpt from a specifically named indexed file,
   summarize a named file using a capped excerpt, or call a per-intent read-only
   file tool. Reads enforce configured-root and current-index checks and cap
-  returned text at 12,000 characters. File changes remain unsupported by the
-  Python app; CMD remains proposal-only until the explicit UI approval action is
-  taken.
+  returned text at 12,000 characters. The single chat prompt routes Find to
+  local results, creates only new bounded UTF-8 text/source files inside
+  configured roots, and stages exact deletes behind a one-time chat confirmation
+  before sending the unchanged file to Windows Recycle Bin. CMD remains
+  proposal-only until the separate explicit UI approval action is taken.
 - Chat can list a requested configured folder without model latency; the listing
   enforces root containment, skips links outside allowed roots, and bounds both
   the scan and displayed names.
@@ -47,12 +50,11 @@ still being validated.
 - Gated and blocked CMD proposals use the policy file, SQLite audit records, and
   explicit Approve/Reject UI controls; only the approved runner executes them.
 - Search result cards show paths, snippets, and available page/heading context.
-- Windows Qt integration tests now cover avatar and hotkey-bridge wake,
+- Windows Qt integration tests now cover chat-window and hotkey-bridge wake,
   selected-file open and feedback persistence, CMD audit approval/rejection,
   and idle resource unload. Existing Qt tests cover streamed chat and cancel.
-- A shaded robot avatar reflects idle, active, and pending-CMD-approval states;
-  clicking, dragging, accessibility naming, and the right-click Quit action are
-  covered by Qt lifecycle tests.
+- The desktop opens directly to a resizable chat window; the system tray menu
+  opens or quits FileBot while the global hotkey toggles chat visibility.
 - Chat stream deltas are coalesced into 30 ms UI updates, avoiding a Qt text
   widget mutation for every model fragment while keeping partial text visible.
 - The popover now labels itself as a local assistant and retains the current

@@ -6,6 +6,7 @@ import sqlite3
 import hashlib
 import os
 import re
+import secrets
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -102,6 +103,19 @@ CREATE TABLE IF NOT EXISTS cmd_audit (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cmd_audit_status ON cmd_audit(status, created_at);
+
+CREATE TABLE IF NOT EXISTS file_delete_audit (
+    token TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    file_size INTEGER NOT NULL CHECK(file_size >= 0),
+    file_mtime_ns INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','running','executed','cancelled','expired','failed')),
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    completed_at REAL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_file_delete_status ON file_delete_audit(status, created_at);
 """
 
 class Database:
@@ -579,3 +593,91 @@ class Database:
             connection.execute("""UPDATE cmd_audit SET status=?,exit_code=?,stdout_tail=?,stderr_tail=?,executed_at=strftime('%s','now')
                 WHERE proposal_id=? AND status='approved' AND executed_at IS NOT NULL""",
                 ("executed" if exit_code == 0 else "failed",exit_code,stdout[-4000:],stderr[-4000:],proposal_id))
+
+    def stage_file_delete(
+        self, path: str | Path, *, file_size: int, file_mtime_ns: int, lifetime_seconds: int = 600,
+    ) -> str:
+        """Stage one exact file for deletion after a short-lived chat confirmation token."""
+        if file_size < 0 or not 30 <= lifetime_seconds <= 900:
+            raise ValueError("Invalid file-delete audit bounds")
+        token = secrets.token_hex(4).upper()
+        now = datetime.now(timezone.utc).timestamp()
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO file_delete_audit
+                   (token,path,file_size,file_mtime_ns,status,created_at,expires_at)
+                   VALUES(?,?,?,?,'pending',?,?)""",
+                (token, str(Path(path).expanduser().resolve()), file_size, file_mtime_ns,
+                 now, now + lifetime_seconds),
+            )
+        return token
+
+    def claim_file_delete(self, token: str) -> sqlite3.Row | None:
+        """Claim one pending token exactly once; expired requests cannot run."""
+        normalized = token.strip().upper()
+        now = datetime.now(timezone.utc).timestamp()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM file_delete_audit WHERE token=? AND status='pending'", (normalized,),
+            ).fetchone()
+            if row is None:
+                return None
+            if float(row["expires_at"]) <= now:
+                connection.execute(
+                    "UPDATE file_delete_audit SET status='expired',completed_at=? WHERE token=? AND status='pending'",
+                    (now, normalized),
+                )
+                return None
+            changed = connection.execute(
+                "UPDATE file_delete_audit SET status='running' WHERE token=? AND status='pending'",
+                (normalized,),
+            ).rowcount
+            return connection.execute(
+                "SELECT * FROM file_delete_audit WHERE token=?", (normalized,),
+            ).fetchone() if changed == 1 else None
+
+    def cancel_file_delete(self, token: str) -> bool:
+        """Cancel a pending deletion without touching the named file."""
+        normalized = token.strip().upper()
+        now = datetime.now(timezone.utc).timestamp()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """UPDATE file_delete_audit SET status='expired',completed_at=?
+                   WHERE token=? AND status='pending' AND expires_at<=?""",
+                (now, normalized, now),
+            )
+            changed = connection.execute(
+                """UPDATE file_delete_audit SET status='cancelled',completed_at=?
+                   WHERE token=? AND status='pending' AND expires_at>?""",
+                (now, normalized, now),
+            )
+            return changed.rowcount == 1
+
+    def finish_file_delete(self, token: str, *, error: str | None = None) -> None:
+        """Record the result of the claimed Recycle Bin operation."""
+        status = "failed" if error else "executed"
+        with self.connect() as connection:
+            connection.execute(
+                """UPDATE file_delete_audit SET status=?,completed_at=?,error=?
+                   WHERE token=? AND status='running'""",
+                (status, datetime.now(timezone.utc).timestamp(), error[:1000] if error else None,
+                 token.strip().upper()),
+            )
+
+    def recover_file_deletes(self) -> tuple[int, int]:
+        """Expire old confirmations and mark interrupted delete attempts as failed."""
+        now = datetime.now(timezone.utc).timestamp()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            expired = connection.execute(
+                """UPDATE file_delete_audit SET status='expired',completed_at=?
+                   WHERE status='pending' AND expires_at<=?""", (now, now),
+            ).rowcount
+            interrupted = connection.execute(
+                """UPDATE file_delete_audit SET status='failed',completed_at=?,
+                   error='FileBot stopped during the Recycle Bin operation; verify the file location'
+                   WHERE status='running'""", (now,),
+            ).rowcount
+            return expired, interrupted

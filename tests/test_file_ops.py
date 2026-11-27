@@ -13,6 +13,63 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FileOpsTests(unittest.TestCase):
+    def test_create_is_root_scoped_text_only_and_never_overwrites(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            base = Path(directory)
+            root, outside = base / "allowed", base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            db = Database(base / "state.sqlite3")
+            db.initialize()
+            tool = FileOpsTool(db, roots=[str(root)])
+
+            created = Path(tool.create_file("notes.md", "New local note"))
+            self.assertEqual(created.read_text(encoding="utf-8"), "New local note")
+            self.assertEqual(db.pending_dirty()[0]["path"], str(created.resolve()))
+            with self.assertRaisesRegex(FileExistsError, "will not overwrite"):
+                tool.create_file("notes.md", "replacement")
+            with self.assertRaisesRegex(PermissionError, "outside FileBot"):
+                tool.create_file(str(outside / "private.txt"), "private")
+            with self.assertRaisesRegex(ValueError, "text extension"):
+                tool.create_file("run.ps1", "Write-Host unsafe")
+
+    def test_delete_requires_one_time_code_and_rechecks_the_file(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            base = Path(directory)
+            root = base / "allowed"
+            root.mkdir()
+            target = root / "note.txt"
+            target.write_text("keep unless confirmed", encoding="utf-8")
+            db = Database(base / "state.sqlite3")
+            db.initialize()
+            tool = FileOpsTool(db, roots=[str(root)])
+
+            token = tool.stage_delete(str(target))
+            self.assertTrue(target.exists())
+            row = db.claim_file_delete(token)
+            self.assertIsNotNone(row)
+            moved: list[Path] = []
+            with patch("agent.tools.file_ops_tool._move_file_to_recycle_bin", side_effect=moved.append):
+                tool.delete_to_recycle_bin(
+                    str(target), expected_size=row["file_size"], expected_mtime_ns=row["file_mtime_ns"],
+                )
+            db.finish_file_delete(token)
+            self.assertEqual(moved, [target.resolve()])
+            self.assertTrue(target.exists())  # the test stub models a successful OS recycle-bin call
+            self.assertIsNone(db.claim_file_delete(token))
+
+            changed = root / "changed.txt"
+            changed.write_text("original", encoding="utf-8")
+            changed_token = tool.stage_delete(str(changed))
+            expected = db.claim_file_delete(changed_token)
+            changed.write_text("changed since confirmation", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "changed after confirmation"):
+                tool.delete_to_recycle_bin(
+                    str(changed), expected_size=expected["file_size"],
+                    expected_mtime_ns=expected["file_mtime_ns"],
+                )
+            self.assertTrue(changed.exists())
+
     def test_lists_only_configured_folders_and_bounds_the_result(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             base = Path(directory)

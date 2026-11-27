@@ -5,6 +5,7 @@ import tempfile
 import asyncio
 from io import BytesIO
 import os
+import re
 import sqlite3
 import subprocess
 import unittest
@@ -388,7 +389,7 @@ class DatabaseTests(unittest.TestCase):
         class FakeLoop:
             def __init__(self) -> None:
                 self.tools = Registry([
-                    "search_files", "open_file", "read_file", "list_files", "propose_cmd",
+                    "search_files", "open_file", "read_file", "list_files", "create_file", "propose_cmd",
                 ])
 
         class FakeBot:
@@ -417,6 +418,7 @@ class DatabaseTests(unittest.TestCase):
             "open": Registry(["open_file", "read_file", "search_files"]),
             "read": Registry(["list_files", "read_file", "search_files"]),
             "list": Registry(["list_files"]),
+            "create": Registry(["create_file", "list_files", "read_file", "search_files"]),
             "cmd": Registry(["propose_cmd"]),
         }
         def run_immediate(coroutine, *, timeout=None):
@@ -430,11 +432,13 @@ class DatabaseTests(unittest.TestCase):
         try:
             with patch.object(runtime, "_run_async", side_effect=run_immediate):
                 self.assertEqual(runtime.ask("Say hello"), "Hello")
-                self.assertEqual(runtime.ask("Find the meeting notes"), "Hello")
+                self.assertEqual(runtime.ask("Find the meeting notes"), [])
                 self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
                 self.assertEqual(runtime.ask("Read this report"), "Hello")
                 self.assertEqual(runtime.ask("Run command whoami"), "Hello")
                 result = runtime._run_agent("list", bot.run("Show me folder contents"))
+                self.assertEqual(runtime._answer_text(result), "Hello")
+                result = runtime._run_agent("create", bot.run("Create a notes file"))
                 self.assertEqual(runtime._answer_text(result), "Hello")
         finally:
             runtime._model_used = False
@@ -443,10 +447,10 @@ class DatabaseTests(unittest.TestCase):
                 runtime.close()
 
         self.assertEqual(bot.seen_tools, [
-            ["list_files", "read_file", "search_files"], ["search_files"],
+            ["list_files", "read_file", "search_files"],
             ["open_file", "read_file", "search_files"],
             ["list_files", "read_file", "search_files"], ["propose_cmd"],
-            ["list_files"],
+            ["list_files"], ["create_file", "list_files", "read_file", "search_files"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
 
@@ -536,6 +540,62 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn(str((self.root / "Reports").resolve()), answer)
         check_ollama.assert_not_called()
 
+    def test_find_prompt_returns_local_results_without_starting_the_model(self) -> None:
+        plan_path = self.root / "plan.txt"
+        class FakeEngine:
+            def __init__(self) -> None:
+                self.query = None
+
+            def search(self, query, limit=10):
+                self.query = query
+                return [{"path": str(plan_path), "snippet": "launch plan"}]
+
+        engine = FakeEngine()
+        runtime = BotRuntime({"index": {}}, self.db, engine)
+        with patch.object(runtime, "_check_ollama_ready") as check_ollama:
+            result = runtime.ask_streaming("Find the launch plan", lambda _delta: None)
+
+        self.assertEqual(result[0]["snippet"], "launch plan")
+        self.assertEqual(engine.query, "Find the launch plan")
+        check_ollama.assert_not_called()
+
+    def test_delete_prompt_requires_exact_token_and_confirms_to_recycle_bin(self) -> None:
+        file_path = self.root / "Project Notes.txt"
+        file_path.write_text("keep until confirmation", encoding="utf-8")
+        self.db.replace_file(
+            file_path, content_hash="delete-hash", size=file_path.stat().st_size,
+            mtime=file_path.stat().st_mtime, chunks=[{"text": "project notes"}],
+        )
+
+        class FakeEngine:
+            def search(self, query, limit=10):
+                return []
+
+        runtime = BotRuntime({"index": {"roots": [str(self.root)]}}, self.db, FakeEngine())
+        staged = runtime.ask('Delete "Project Notes.txt"')
+        token_match = re.search(r"CONFIRM DELETE ([A-F0-9]{8})", staged)
+        self.assertIsNotNone(token_match)
+        self.assertIn("Nothing has been deleted", staged)
+        self.assertTrue(file_path.exists())
+        token = token_match.group(1)
+
+        with patch("agent.tools.file_ops_tool._move_file_to_recycle_bin") as recycle:
+            answer = runtime.ask(f"CONFIRM DELETE {token}")
+            recycle.assert_called_once_with(file_path.resolve())
+            self.assertIn("Windows Recycle Bin", answer)
+            self.assertIn("already used", runtime.ask(f"CONFIRM DELETE {token}"))
+
+        cancel_path = self.root / "Cancel Notes.txt"
+        cancel_path.write_text("keep me", encoding="utf-8")
+        self.db.replace_file(
+            cancel_path, content_hash="cancel-hash", size=cancel_path.stat().st_size,
+            mtime=cancel_path.stat().st_mtime, chunks=[{"text": "cancel notes"}],
+        )
+        cancel_staged = runtime.ask('Delete "Cancel Notes.txt"')
+        cancel_token = re.search(r"CANCEL DELETE ([A-F0-9]{8})", cancel_staged).group(1)
+        self.assertEqual(runtime.ask(f"CANCEL DELETE {cancel_token}"), "Canceled. The file was not changed.")
+        self.assertTrue(cancel_path.exists())
+
     def test_fast_router_extracts_quoted_and_bare_file_targets(self) -> None:
         router = FastRouter()
         self.assertEqual(router.open_target('Open "Project Notes.pdf" please'), "Project Notes.pdf")
@@ -551,6 +611,13 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(router.route("Show me the files in Reports"), "list")
         self.assertEqual(router.list_target("Show me the files in Reports"), "Reports")
         self.assertEqual(router.route("What's in quarterly-summary.txt?"), "read")
+        self.assertEqual(router.route('Create a new file named "brief.txt"'), "create")
+        self.assertEqual(router.route('Delete "brief.txt"'), "delete")
+        self.assertEqual(router.delete_target('Delete "brief.txt"'), "brief.txt")
+        self.assertEqual(router.route("How do I create a file?"), "chat")
+        self.assertEqual(router.route("How do I delete a file?"), "chat")
+        self.assertEqual(router.route("CONFIRM DELETE A1B2C3D4"), "confirm_delete")
+        self.assertEqual(router.route("CANCEL DELETE A1B2C3D4"), "cancel_delete")
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
 
@@ -674,7 +741,8 @@ class DatabaseTests(unittest.TestCase):
             workspace = Path(directory)
             _ensure_filebot_instructions(workspace)
             instructions = (workspace / "SOUL.md").read_text(encoding="utf-8")
-            self.assertIn("Do not pretend to create", instructions)
+            self.assertIn("create_file", instructions)
+            self.assertIn("confirmation", instructions)
             self.assertIn("propose_cmd", instructions)
             (workspace / "SOUL.md").write_text("User customized instructions", encoding="utf-8")
             _ensure_filebot_instructions(workspace)

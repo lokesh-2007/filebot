@@ -8,7 +8,7 @@ from typing import Any
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QTableWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton, QTableWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 from executor.cmd_runner import CommandRunner
@@ -75,53 +75,55 @@ class _CommandTask(QThread):
 
 
 class PopoverCard(QWidget):
-    """Search/chat panel that surfaces pending commands with Approve/Reject controls."""
+    """Single-prompt file chat with visible approvals for sensitive actions."""
     activity = pyqtSignal()
     work_started = pyqtSignal()
     work_finished = pyqtSignal()
     status_changed = pyqtSignal(str)
     def __init__(self, engine: Any, runtime: Any, db: Database, *, loading: bool = False) -> None:
-        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(None, Qt.WindowType.Window)
         self.engine, self.runtime, self.db = engine, runtime, db
         self.runner = CommandRunner(db)
         runtime_settings = getattr(runtime, "settings", {})
         roots = runtime_settings.get("index", {}).get("roots") if isinstance(runtime_settings, dict) else None
         self.file_ops = FileOpsTool(db, roots=roots)
         self.setWindowTitle("FileBot")
-        self.setFixedWidth(390)
-        self.setStyleSheet("QWidget{background:#171923;color:#f5f5f5;font:10pt 'Segoe UI'} QLineEdit,QTextEdit,QListWidget{background:#242736;border:1px solid #40445a;border-radius:7px;padding:7px} QPushButton{background:#5141a4;border:0;border-radius:6px;padding:6px 10px} QFrame{border:1px solid #45495e;border-radius:7px}")
+        self.setMinimumSize(520, 560)
+        self.resize(640, 720)
+        self.setStyleSheet("QWidget{background:#171923;color:#f5f5f5;font:10pt 'Segoe UI'} QLineEdit,QTextEdit,QListWidget{background:#242736;border:1px solid #40445a;border-radius:7px;padding:8px} QPushButton{background:#5141a4;border:0;border-radius:6px;padding:7px 12px} QPushButton:disabled{background:#35384a;color:#9298aa} QFrame{border:1px solid #45495e;border-radius:7px}")
         layout = QVBoxLayout(self)
-        title = QLabel("FileBot  ·  local assistant")
+        title_row = QHBoxLayout()
+        title = QLabel("FileBot")
         title.setStyleSheet("font-weight:700;font-size:12pt")
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        subtitle = QLabel("Local file assistant")
+        subtitle.setStyleSheet("color:#aeb4c6")
+        title_row.addWidget(subtitle)
+        title_row.addStretch(1)
         self.glossary_button = QPushButton("Search vocabulary…")
         self.glossary_button.setToolTip("Edit shorthand that FileBot expands in local searches")
         self.glossary_button.clicked.connect(self.edit_glossary)
-        layout.addWidget(self.glossary_button)
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("Search files or chat with FileBot…")
-        self.input.returnPressed.connect(self.submit)
-        self.input.textEdited.connect(lambda _text: self.activity.emit())
-        layout.addWidget(self.input)
-        row = QHBoxLayout()
-        self.search_button = QPushButton("Search")
-        self.search_button.clicked.connect(lambda: self.submit(force_search=True))
-        self.ask_button = QPushButton("Ask")
-        self.ask_button.clicked.connect(self.submit)
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setToolTip("Cancel the current local model request")
-        self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self.cancel_request)
-        row.addWidget(self.search_button)
-        row.addWidget(self.ask_button)
-        row.addWidget(self.stop_button)
-        layout.addLayout(row)
+        self.options_button = QPushButton("⋯")
+        self.options_button.setAccessibleName("FileBot options")
+        self.options_button.setFixedWidth(36)
+        options = QMenu(self)
+        options.addAction("Search vocabulary…", self.edit_glossary)
+        self.options_button.setMenu(options)
+        title_row.addWidget(self.options_button)
+        layout.addLayout(title_row)
+        self.answer = QTextEdit()
+        self.answer.setReadOnly(True)
+        self.answer.setPlaceholderText("Your conversation with FileBot will appear here.")
+        layout.addWidget(self.answer, 1)
         self.results = QListWidget()
-        self.results.setMaximumHeight(210)
+        self.results.setMaximumHeight(160)
+        self.results.hide()
         self.results.itemActivated.connect(self.open_result)
         self.results.currentItemChanged.connect(self._update_feedback_controls)
         layout.addWidget(self.results)
-        feedback = QHBoxLayout()
+        self.feedback_row = QWidget()
+        feedback = QHBoxLayout(self.feedback_row)
+        feedback.setContentsMargins(0, 0, 0, 0)
         self.helpful_button = QPushButton("Helpful")
         self.unhelpful_button = QPushButton("Not helpful")
         self.helpful_button.setEnabled(False)
@@ -130,13 +132,31 @@ class PopoverCard(QWidget):
         self.unhelpful_button.clicked.connect(lambda: self._record_feedback("down"))
         feedback.addWidget(self.helpful_button)
         feedback.addWidget(self.unhelpful_button)
-        layout.addLayout(feedback)
-        self.answer = QTextEdit()
-        self.answer.setReadOnly(True)
-        self.answer.setMaximumHeight(180)
-        layout.addWidget(self.answer)
+        self.feedback_row.hide()
+        layout.addWidget(self.feedback_row)
         self.pending = QVBoxLayout()
         layout.addLayout(self.pending)
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Ask FileBot to find, read, create, or manage a file…")
+        self.input.setAccessibleName("Message FileBot")
+        self.input.returnPressed.connect(self.submit)
+        self.input.textEdited.connect(lambda _text: self.activity.emit())
+        layout.addWidget(self.input)
+        row = QHBoxLayout()
+        self.send_button = QPushButton("Send")
+        self.send_button.setDefault(True)
+        self.send_button.clicked.connect(self.submit)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setToolTip("Cancel the current local model request")
+        self.stop_button.setEnabled(False)
+        self.stop_button.setVisible(False)
+        self.stop_button.clicked.connect(self.cancel_request)
+        row.addWidget(self.send_button, 1)
+        row.addWidget(self.stop_button)
+        layout.addLayout(row)
+        # Kept as aliases for lifecycle callers; both refer to the single chat action.
+        self.search_button = self.send_button
+        self.ask_button = self.send_button
         self._task: _Task | None = None
         self._command_task: _CommandTask | None = None
         self._command_queue: list[str] = []
@@ -238,11 +258,10 @@ class PopoverCard(QWidget):
     def set_loading(self, loading: bool) -> None:
         """Show immediate wake feedback and gate requests until retrieval is ready."""
         self.input.setEnabled(not loading)
-        self.search_button.setEnabled(not loading)
-        self.ask_button.setEnabled(not loading)
+        self.send_button.setEnabled(not loading)
         self.stop_button.setEnabled(False)
         if loading:
-            message = "Loading the local search index… You can search or ask as soon as FileBot is ready."
+            message = "Loading the local search index… You can send any file or chat request as soon as FileBot is ready."
             if self._chat_turns:
                 self._render_chat_transcript(message)
             else:
@@ -260,10 +279,10 @@ class PopoverCard(QWidget):
         if self._chat_turns:
             self._render_chat_transcript()
         else:
-            self.answer.setPlainText("Ready. Search local files or ask a question.")
+            self.answer.setPlainText("Ready. Ask FileBot to find, read, summarize, or manage a file.")
         self._refresh_pending()
 
-    def submit(self, force_search: bool = False) -> None:
+    def submit(self) -> None:
         if self._task is not None and self._task.isRunning():
             return
         prompt = self.input.text().strip()
@@ -271,31 +290,29 @@ class PopoverCard(QWidget):
             return
         self.activity.emit()
         self.input.setEnabled(False)
-        self.search_button.setEnabled(False)
-        self.ask_button.setEnabled(False)
-        self.stop_button.setEnabled(not force_search)
+        self.send_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.stop_button.setVisible(True)
         self.status_changed.emit("active")
-        # Ask is always a conversation turn. The dedicated Search button is
-        # the only path that replaces the answer pane with a result list.
-        self._current_chat_prompt = None if force_search else prompt
+        # Every request now enters the same conversation flow. FileBot routes
+        # find/read/open/create/delete requests from the user's words.
+        self._current_chat_prompt = prompt
         self._current_stream_text = ""
-        if self._current_chat_prompt is not None:
-            self._render_chat_transcript("Thinking…")
-        else:
-            self.answer.setPlainText("Searching indexed files…")
+        self.results.hide()
+        self.feedback_row.hide()
+        self._render_chat_transcript("Thinking…")
         self.work_started.emit()
         reset_cancellation = getattr(self.runtime, "reset_cancellation", None)
         if callable(reset_cancellation):
             reset_cancellation()
         self._pending_stream_deltas.clear()
         self._stream_flush_timer.stop()
-        self._task = _Task(self.runtime, prompt, force_search)
+        self._task = _Task(self.runtime, prompt, False)
         self._task.done.connect(self._received)
         self._task.delta.connect(self._received_delta)
         self._chat_has_deltas = False
-        if not force_search:
-            self._request_elapsed_seconds = 0
-            self._request_timer.start()
+        self._request_elapsed_seconds = 0
+        self._request_timer.start()
         self._task.start()
 
     def _received_delta(self, delta: str) -> None:
@@ -384,9 +401,9 @@ class PopoverCard(QWidget):
         self._stream_flush_timer.stop()
         self._flush_stream_deltas()
         self.stop_button.setEnabled(False)
+        self.stop_button.setVisible(False)
         self.input.setEnabled(True)
-        self.search_button.setEnabled(True)
-        self.ask_button.setEnabled(True)
+        self.send_button.setEnabled(True)
         if error:
             if self._current_chat_prompt is not None:
                 self._remember_chat_turn(self._current_chat_prompt, error, persist=False)
@@ -411,13 +428,19 @@ class PopoverCard(QWidget):
                 item.setToolTip(f"{path}\n\n{detail}")
                 item.setData(Qt.ItemDataRole.UserRole, path)
                 self.results.addItem(item)
+            self.results.setVisible(bool(result))
+            self.feedback_row.setVisible(bool(result))
             if not result:
-                self.answer.setPlainText("No matching files found in the current index.")
+                response = "No matching files found in the current index."
             else:
-                self.answer.setPlainText(
-                    f"Found {len(result)} files. Select a result to open it, or click Ask "
-                    "for a local model answer."
-                )
+                response = f"Found {len(result)} matching files. Select one to open it, or ask a follow-up."
+            if self._current_chat_prompt is not None:
+                self._remember_chat_turn(self._current_chat_prompt, response)
+                self._current_chat_prompt = None
+                self._current_stream_text = ""
+                self._render_chat_transcript()
+            else:
+                self.answer.setPlainText(response)
         else:
             final_text = str(result)
             if self._current_chat_prompt is not None:
@@ -458,6 +481,7 @@ class PopoverCard(QWidget):
         enabled = current is not None and bool(current.data(Qt.ItemDataRole.UserRole))
         self.helpful_button.setEnabled(enabled)
         self.unhelpful_button.setEnabled(enabled)
+        self.feedback_row.setVisible(enabled)
 
     def _record_feedback(self, vote: str) -> None:
         """Persist a user's relevance signal for the currently selected file."""
@@ -557,8 +581,7 @@ class PopoverCard(QWidget):
     def _set_request_controls_enabled(self, enabled: bool) -> None:
         """Prevent a second agent request from racing an approved CMD action."""
         self.input.setEnabled(enabled)
-        self.search_button.setEnabled(enabled)
-        self.ask_button.setEnabled(enabled)
+        self.send_button.setEnabled(enabled)
 
     def stop_tasks(self) -> None:
         """Cancel active model work and wait for approved commands to be audited."""

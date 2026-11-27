@@ -2,14 +2,18 @@
 
 ## Unreleased
 
-- Replace the letter badge with a crisp, shaded robot avatar that shows idle,
-  active, and CMD-approval states while retaining mouse, keyboard-accessible,
-  and quit behavior.
+- Open FileBot as a resizable chat window with one prompt composer; move glossary
+  editing out of the main chat flow and keep window controls native.
+- Route find requests directly to local results; create new text files only
+  inside configured roots without overwriting, and require a short-lived token
+  before moving an unchanged delete target to Windows Recycle Bin.
 - Add bounded, read-only access to indexed file excerpts for conversational
   answers, including direct “read report.txt” requests and model-backed
   summaries of specifically named files. Enforce current index membership and
-  configured-root containment; file mutation stays out of the Python app and
-  CMD execution remains behind explicit approval.
+  configured-root containment. Explicit create requests can create a new UTF-8
+  text/source file inside configured roots without overwriting; delete requests
+  require a one-time chat code and move the unchanged file to Windows Recycle
+  Bin. CMD execution remains behind its separate explicit approval gate.
 - Add bounded folder listings for configured roots; skip links that resolve
   outside those roots and keep the list output capped for small model contexts.
 - Keep SQLite lexical retrieval available when vector dependencies or queries

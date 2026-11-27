@@ -4,7 +4,7 @@ This file is a quick orientation for coding agents working in this repository. I
 
 ## What FileBot does
 
-FileBot is a Windows desktop utility for local file search and local-model chat. A lightweight PyQt6 avatar, global hotkey, SQLite database, and watchdog observer stay available while the assistant sleeps. Retrieval and the Nanobot agent are loaded after wake. Windows CMD actions are staged for review and can run only after the user approves them in the popover.
+FileBot is a Windows desktop utility for local file search, safe file actions, and local-model chat. A resizable PyQt6 chat window, system tray, global hotkey, SQLite database, and watchdog observer stay available while heavyweight retrieval and the Nanobot agent sleep. Windows CMD actions are staged for review and can run only after the user approves them in the chat window.
 
 Current version: see `filebot_version.py` (the single source of truth) and `CHANGELOG.md`.
 
@@ -13,13 +13,13 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `app.pyw` — Windows entry point; configures logging, enforces one running instance, and starts UI, watcher, lifecycle, and hotkey components.
 - `daemon/lifecycle_manager.py`, `daemon/metrics.py` — wake/sleep supervision and privacy-safe startup, response latency, and Windows working-set diagnostics.
 - `daemon/watcher.py` — watches configured roots and debounces file events into SQLite without loading retrieval models.
-- `ui/avatar_bubble.py`, `ui/popover_card.py`, `ui/hotkey_bridge.py` — avatar, search/chat/approval popover, and global hotkey bridge.
+- `ui/popover_card.py`, `ui/hotkey_bridge.py` — resizable single-prompt chat window and global hotkey bridge. `ui/avatar_bubble.py` is retained for its visual tests but is no longer the app entry point.
 - `storage/db.py` — SQLite WAL storage for indexed files/chunks, dirty work, file signals/glossary, and command audit state.
 - `retrieval/parsers.py` — bounded TXT/Markdown, PDF, DOCX, and offline-checked Tree-sitter source parsing.
 - `retrieval/index_worker.py` — drains durable file changes, hashes and parses files, retries failures, and refreshes the index.
 - `retrieval/hybrid_engine.py` — lazy FastEmbed/ONNX embeddings, ChromaDB, BM25, and reciprocal-rank fusion.
 - `agent/bot_runtime.py` — lazy Nanobot/Ollama runtime, fast intent routing, and the narrow FileBot tool registry.
-- `agent/tools/` — `search_files`, bounded listing/reading/opening within configured roots, and command proposals.
+- `agent/tools/` — `search_files`, bounded listing/reading/opening, root-scoped new-text-file creation, staged Recycle Bin deletes, and command proposals.
 - `executor/policy_engine.py`, `executor/cmd_runner.py` — default-deny command classification and the sole approved-command execution path.
 - `filebot_config.py`, `config/settings.yaml` — settings validation, defaults, and Windows-friendly path expansion.
 - `config/cmd_policy.yaml` — blocked/read-only/gated command patterns. Treat policy edits as security-sensitive.
@@ -34,7 +34,7 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 1. Do not import FastEmbed, BM25, ChromaDB, or Nanobot from the sleeping entry-point path. Keep those imports behind wake/activation code; `tests/test_startup.py` checks this.
 2. Index and open only files contained within configured roots. Resolve paths before checking containment; fail closed for invalid paths and symlinks escaping a root.
 3. Keep parsing and indexing bounded by the configured file, extracted-text, DOCX archive, chunk, and embedding-batch limits. Preserve dirty-queue retries when indexing fails or a file changes mid-read.
-4. Do not add Nanobot shell, filesystem-write, web, or other broad tools. FileBot's agent tools are restricted per turn: chat gets bounded indexed search/read and configured-root listing, search turns get local search, open/read/list requests get corresponding safe file access, and CMD requests get proposal only.
+4. Do not add Nanobot shell, broad filesystem, or web tools. FileBot's per-intent tools are restricted: chat gets bounded indexed search/read and configured-root listing; create turns get only the root-scoped no-overwrite text creator plus read/search context; delete turns stage one exact configured-root file and require a one-time confirmation token before Recycle Bin; CMD turns get proposal only.
 5. Never execute a proposal from the model response. `propose_cmd` only classifies and stages an audit row. The user must explicitly approve in the UI; `CommandRunner` rechecks current policy and claims an approved row exactly once.
 6. Keep `config/cmd_policy.yaml` default-deny. Block shell chaining, redirection, expansion, installer/privilege/disk operations, and any command not deliberately allowlisted. A `read_only` classification still goes through the visible approval flow.
 7. Keep inference on the configured local Ollama endpoint. Network is only expected for initial dependency/model downloads unless the user changes this behavior.

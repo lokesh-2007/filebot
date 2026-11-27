@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QStyle, QSystemTrayIcon
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
@@ -16,7 +16,6 @@ from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
 from filebot_version import __version__
 from storage.db import Database
-from ui.avatar_bubble import AvatarBubble
 from ui.hotkey_bridge import HotkeyBridge
 
 
@@ -41,10 +40,11 @@ def main() -> int:
     app.setApplicationName("FileBot")
     app.setApplicationDisplayName("FileBot")
     app.setApplicationVersion(__version__)
+    app.setQuitOnLastWindowClosed(False)
     guard = InstanceGuard(db_path.parent / "filebot.lock")
     if not guard.acquire():
         QMessageBox.information(None, "FileBot is already running",
-                                "The existing FileBot avatar is available in the desktop session.")
+                                "The existing FileBot chat window is available in the desktop session or system tray.")
         return 0
     try:
         db = Database(db_path)
@@ -55,26 +55,51 @@ def main() -> int:
                 "Recovered command audit after an unclean shutdown: %d require re-approval, %d interrupted",
                 requeued, interrupted,
             )
+        expired_deletions, interrupted_deletions = db.recover_file_deletes()
+        if expired_deletions or interrupted_deletions:
+            logging.warning(
+                "Recovered file delete audit: %d expired confirmations, %d interrupted operations",
+                expired_deletions, interrupted_deletions,
+            )
         lifecycle = LifecycleManager(settings, db, root)
-        avatar = AvatarBubble()
-        avatar.quit_requested.connect(app.quit)
         watcher = FileWatcher(settings, db)
         bridge = HotkeyBridge(settings["runtime"].get("hotkey", "<ctrl>+<alt>+<space>"))
-        avatar.toggled.connect(lifecycle.toggle)
-        avatar.status_changed.connect(lifecycle.set_status)
-        lifecycle.status_changed.connect(avatar.set_status)
-        lifecycle.popover_ready.connect(avatar.show_popover)
+        tray = QSystemTrayIcon(app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), app)
+        tray.setToolTip("FileBot — local file assistant")
+        tray_menu = QMenu()
+        open_action = tray_menu.addAction("Open FileBot")
+        open_action.triggered.connect(lifecycle.wake)
+        tray_menu.addSeparator()
+        quit_action = tray_menu.addAction("Quit FileBot")
+        quit_action.triggered.connect(app.quit)
+        tray.setContextMenu(tray_menu)
+
+        def show_chat_window(window: object) -> None:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+
+        def activate_tray(reason: QSystemTrayIcon.ActivationReason) -> None:
+            if reason in {
+                QSystemTrayIcon.ActivationReason.Trigger,
+                QSystemTrayIcon.ActivationReason.DoubleClick,
+            }:
+                lifecycle.toggle()
+
+        lifecycle.popover_ready.connect(show_chat_window)
         lifecycle.error_occurred.connect(
-            lambda message: QMessageBox.warning(avatar, "FileBot could not wake", message)
+            lambda message: QMessageBox.warning(None, "FileBot could not wake", message)
         )
         bridge.activated.connect(lifecycle.toggle)
+        tray.activated.connect(activate_tray)
         try:
             bridge.start()
             watcher.start()
-            avatar.show()
+            tray.show()
+            lifecycle.wake()
             working_set = process_working_set_mb()
             if working_set is not None:
-                logging.info("FileBot dormant startup working set: %.1f MiB", working_set)
+                logging.info("FileBot chat startup working set: %.1f MiB", working_set)
         except Exception:
             watcher.stop()
             bridge.stop()

@@ -289,7 +289,24 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("The exact matching sentence.", item.text())
         self.assertEqual(item.data(Qt.ItemDataRole.UserRole), path)
         self.assertIn(path, item.toolTip())
-        self.assertIn("click Ask", card.answer.toPlainText())
+        self.assertEqual(card.search_button.text(), "Send")
+        self.assertIs(card.ask_button, card.search_button)
+        self.assertIn("ask a follow-up", card.answer.toPlainText())
+        card.close()
+
+    def test_popover_has_one_prompt_action_for_search_and_chat(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        send_buttons = [button for button in card.findChildren(QPushButton) if button.text() in {"Send", "Search", "Ask"}]
+        self.assertEqual([button.text() for button in send_buttons], ["Send"])
+        self.assertIn("find", card.input.placeholderText())
+        self.assertIn("create", card.input.placeholderText())
+        self.assertEqual(card.windowType(), Qt.WindowType.Window)
+        self.assertFalse(bool(card.windowFlags() & Qt.WindowType.FramelessWindowHint))
+        self.assertGreaterEqual(card.minimumWidth(), 520)
         card.close()
 
     def test_chat_wait_feedback_reports_elapsed_time(self) -> None:

@@ -52,7 +52,7 @@ class _WakeWorker(QThread):
 
 
 class LifecycleManager(QObject):
-    """Own active resources and keep the avatar responsive during model work."""
+    """Own active resources while the chat window stays responsive during model work."""
     popover_ready = pyqtSignal(object)
     status_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
@@ -81,7 +81,13 @@ class LifecycleManager(QObject):
             if self.popover is not None:
                 self.popover.hide()
         elif self._active:
-            self.sleep()
+            if self.popover is not None and self.popover.isVisible():
+                self.popover.hide()
+            elif self.popover is not None:
+                self.popover.show()
+                self.popover.raise_()
+                self.popover.activateWindow()
+            self.touch()
         else:
             self.wake()
 
