@@ -142,6 +142,11 @@ class PopoverCard(QWidget):
         self._command_queue: list[str] = []
         self._request_elapsed_seconds = 0
         self._chat_has_deltas = False
+        self._pending_stream_deltas: list[str] = []
+        self._stream_flush_timer = QTimer(self)
+        self._stream_flush_timer.setSingleShot(True)
+        self._stream_flush_timer.setInterval(30)
+        self._stream_flush_timer.timeout.connect(self._flush_stream_deltas)
         self._request_timer = QTimer(self)
         self._request_timer.setInterval(10_000)
         self._request_timer.timeout.connect(self._show_wait_feedback)
@@ -262,6 +267,8 @@ class PopoverCard(QWidget):
         reset_cancellation = getattr(self.runtime, "reset_cancellation", None)
         if callable(reset_cancellation):
             reset_cancellation()
+        self._pending_stream_deltas.clear()
+        self._stream_flush_timer.stop()
         self._task = _Task(self.runtime, prompt, force_search)
         self._task.done.connect(self._received)
         self._task.delta.connect(self._received_delta)
@@ -272,13 +279,23 @@ class PopoverCard(QWidget):
         self._task.start()
 
     def _received_delta(self, delta: str) -> None:
-        """Append a streamed model token on the UI thread."""
+        """Batch streamed chunks to keep QTextEdit layout off the token path."""
         if not delta:
             return
         if not self._chat_has_deltas:
             self._chat_has_deltas = True
             self._request_timer.stop()
             self.answer.clear()
+        self._pending_stream_deltas.append(delta)
+        if not self._stream_flush_timer.isActive():
+            self._stream_flush_timer.start()
+
+    def _flush_stream_deltas(self) -> None:
+        """Append buffered model text in one UI update."""
+        if not self._pending_stream_deltas:
+            return
+        delta = "".join(self._pending_stream_deltas)
+        self._pending_stream_deltas.clear()
         cursor = self.answer.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(delta)
@@ -295,6 +312,8 @@ class PopoverCard(QWidget):
 
     def _received(self, result: object, error: str) -> None:
         self._request_timer.stop()
+        self._stream_flush_timer.stop()
+        self._flush_stream_deltas()
         self.stop_button.setEnabled(False)
         self.input.setEnabled(True)
         self.search_button.setEnabled(True)
@@ -325,7 +344,9 @@ class PopoverCard(QWidget):
                     "for a local model answer."
                 )
         else:
-            self.answer.setPlainText(str(result))
+            final_text = str(result)
+            if not self._chat_has_deltas or self.answer.toPlainText() != final_text:
+                self.answer.setPlainText(final_text)
         self._refresh_pending()
         self.work_finished.emit()
 

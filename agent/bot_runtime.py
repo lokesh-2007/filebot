@@ -59,7 +59,7 @@ def _nanobot_config_payload(settings: dict[str, Any], workspace: Path,
             "max_tokens": max(1, int(ollama.get("num_predict", 256))),
             "context_window_tokens": max(256, int(ollama.get("num_ctx", 4096))),
             "max_tool_iterations": 5, "max_concurrent_subagents": 1,
-            "disabled_skills": ["*"],
+            "disabled_skills": [],
         }},
         "providers": {"ollama": {"api_base": base_url}},
         "tools": {"exec": {"enable": False}, "file": {"enable": False},
@@ -84,6 +84,15 @@ def _is_unexecuted_tool_text(content: str) -> bool:
     return isinstance(payload, dict) and payload.get("name") in {
         "search_files", "open_file", "propose_cmd"
     } and isinstance(payload.get("arguments"), dict)
+
+
+def _disable_nanobot_skills(context: Any) -> int:
+    """Exclude skill summaries FileBot cannot use from each model prompt."""
+    loader = context.skills
+    available = loader.list_skills(filter_unavailable=False)
+    names = {skill["name"] for skill in available}
+    loader.disabled_skills.update(names)
+    return len(names)
 
 
 class BotRuntime:
@@ -257,6 +266,12 @@ class BotRuntime:
         registry.register(OpenTool())
         registry.register(ProposeTool())
         loop = AgentLoop.from_config(config, tool_registry=registry)
+        # Nanobot treats "*" as a literal skill name, so disabled_skills=["*"]
+        # still adds every bundled skill description to each system prompt.
+        # FileBot has no skill-reading tool; exclude discovered skills explicitly
+        # to keep the prompt within the configured local model context budget.
+        disabled_skill_count = _disable_nanobot_skills(loop.context)
+        log.debug("Excluded %d unavailable Nanobot skill summaries from prompts", disabled_skill_count)
         # ToolLoader also discovers Nanobot defaults. Enforce an allowlist after
         # construction so disabled settings or future upstream tools cannot widen access.
         allowed_tools = {"search_files", "open_file", "propose_cmd"}

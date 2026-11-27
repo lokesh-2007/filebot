@@ -36,6 +36,18 @@ still being validated.
   and idle resource unload. Existing Qt tests cover streamed chat and cancel.
 - Right-clicking the avatar now exposes a clean Quit action for controlled
   shutdown before a source-based update.
+- Chat stream deltas are coalesced into 30 ms UI updates, avoiding a Qt text
+  widget mutation for every model fragment while keeping partial text visible.
+- Nanobot skill summaries are explicitly excluded from FileBot prompts because
+  FileBot does not expose Nanobot's skill reader. This avoids a context-budget
+  rejection caused by treating `"*"` as a literal disabled skill name.
+- A local Ollama probe now verifies a real streamed response using an isolated
+  temporary database and no user corpus. On the development Windows machine
+  (`qwen2.5-coder:3b`), a cold run measured 23.687 s to first text / 23.834 s
+  total; a subsequent warm run measured 6.019 s / 6.128 s. FileBot process
+  working set rose 28.504→154.953 MB cold and 28.613→121.090 MB warm.
+  These are single-turn observations, not peak system RAM or representative
+  performance targets; Ollama's separate process is not included.
 
 ## Remaining product requirements
 
@@ -43,12 +55,13 @@ still being validated.
   deterministic SQLite lexical fixture now checks edited glossary expansion
   and same-session feedback ranking, but semantic ranking on a real local
   corpus remains unvalidated.
-- Windows UI acceptance flows pass in CI on Python 3.11 and 3.12. Add live
-  Ollama/physical-keyboard coverage for streamed chat, cancellation, and
-  wake-to-idle behavior.
-- Measure cold startup, wake-to-search, wake-to-first-token, peak and dormant
-  working set, and idle unload on supported Windows machines. The PDF's RAM and
-  latency targets are goals, not measured claims yet.
+- Windows UI acceptance flows pass in CI on Python 3.11 and 3.12. A local live
+  Ollama chat now returns a streamed response; hardware keyboard, startup
+  cancellation, wake-to-idle, and repeatable multi-machine performance checks
+  remain open.
+- Measure cold startup, wake-to-search, peak total system RAM, dormant working
+  set, and idle unload on supported Windows machines. The PDF's RAM and latency
+  targets remain goals, not measured claims.
 - Complete Rust feature parity, including local model start/recovery, hybrid
   retrieval feedback/glossary behavior, accessible result opening, and Windows
   UI verification. The core now starts/rechecks local Ollama on model use,

@@ -22,6 +22,7 @@ from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
 from ui.hotkey_bridge import HotkeyBridge
 from storage.db import Database
+from agent.bot_runtime import _disable_nanobot_skills
 
 
 class LifecycleTests(unittest.TestCase):
@@ -32,6 +33,19 @@ class LifecycleTests(unittest.TestCase):
     def test_working_set_metrics_degrade_cleanly_off_windows(self) -> None:
         with patch("daemon.metrics.os.name", "posix"):
             self.assertIsNone(process_working_set_mb())
+
+    def test_nanobot_prompt_excludes_skills_filebot_cannot_use(self) -> None:
+        class SkillLoader:
+            disabled_skills: set[str] = set()
+
+            def list_skills(self, *, filter_unavailable: bool):
+                self.assert_filter = filter_unavailable
+                return [{"name": "weather"}, {"name": "image-generation"}]
+
+        loader = SkillLoader()
+        self.assertEqual(_disable_nanobot_skills(type("Context", (), {"skills": loader})()), 2)
+        self.assertEqual(loader.disabled_skills, {"weather", "image-generation"})
+        self.assertFalse(loader.assert_filter)
 
     def test_idle_unload_waits_for_all_active_work(self) -> None:
         manager = LifecycleManager({"runtime": {"idle_unload_seconds": 60}}, None, Path.cwd())
@@ -450,6 +464,23 @@ class LifecycleTests(unittest.TestCase):
             time.sleep(0.01)
         self.app.processEvents()
         self.assertEqual(card.answer.toPlainText(), "Partial answer complete")
+        card.close()
+
+    def test_chat_stream_batches_widget_updates_and_flushes_final_text(self) -> None:
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        card = PopoverCard(engine=None, runtime=None, db=FakeDatabase())
+        card._received_delta("A responsive ")
+        card._received_delta("local answer.")
+
+        self.assertEqual(card.answer.toPlainText(), "")
+        self.assertEqual(card._pending_stream_deltas, ["A responsive ", "local answer."])
+
+        card._flush_stream_deltas()
+        self.assertEqual(card.answer.toPlainText(), "A responsive local answer.")
+        self.assertEqual(card._pending_stream_deltas, [])
         card.close()
 
     def test_empty_search_results_explain_that_the_index_has_no_match(self) -> None:
