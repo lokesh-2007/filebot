@@ -1,5 +1,18 @@
 # Changelog
 
+## Windows desktop acceptance coverage 0.6.12 — 2026-11-27
+
+- Add Qt integration flows for avatar and hotkey-bridge wake, selected-file
+  opening and feedback persistence, real audit-row approval/rejection, and
+  idle resource unload. Existing tests cover streamed text and cancellation.
+- Correct BM25S result tuple handling and ignore zero-score rows, preventing
+  unrelated files from appearing as lexical matches.
+- The six targeted Qt acceptance tests pass locally. The full suite stalls when
+  Python's Windows asyncio proactor attempts to create a loopback socket pair
+  in the managed sandbox; Windows CI remains the full-suite gate. Tests use a
+  local process stub for approved CMD and do not claim live Ollama or physical
+  keyboard injection.
+
 ## Rust on-demand Ollama recovery 0.6.11 — 2026-11-27
 
 - Match the Python settings for local Ollama auto-start and bounded startup

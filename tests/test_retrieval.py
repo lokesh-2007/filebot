@@ -141,7 +141,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
             db.initialize()
             documents = [
                 ("api-reference.md", "Product specification for the REST API and auth headers."),
-                ("retention-policy.md", "Records retention policy: keep audit logs for 30 days."),
+                ("retention-policy.md", "Records retention policy: keep audit logs. This retention policy governs records for 30 days."),
                 ("retention-policy-draft.md", "Draft retention policy for archived records."),
                 ("incident-runbook.md", "Incident recovery steps for a failed nightly backup."),
                 ("budget-notes.md", "Quarterly budget forecast and vendor costs."),

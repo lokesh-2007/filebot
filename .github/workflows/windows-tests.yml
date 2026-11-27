@@ -89,6 +89,16 @@ jobs:
         run: python -m pip install "PyYAML>=6,<7" "watchdog>=4,<7" "PyQt6>=6.6,<7"
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Run Windows desktop acceptance flows
+        run: >-
+          python -m unittest
+          tests.test_lifecycle.LifecycleTests.test_avatar_and_hotkey_activation_both_reach_wake_flow
+          tests.test_lifecycle.LifecycleTests.test_result_activation_opens_indexed_file_and_records_feedback
+          tests.test_lifecycle.LifecycleTests.test_command_approval_and_rejection_flow_through_real_audit_rows
+          tests.test_lifecycle.LifecycleTests.test_popover_displays_chat_text_before_the_turn_finishes
+          tests.test_lifecycle.LifecycleTests.test_chat_can_be_cancelled_without_blocking_the_popover
+          tests.test_lifecycle.LifecycleTests.test_idle_sleep_closes_runtime_and_releases_active_resources
+          -v
       - name: Parse PowerShell setup and launch scripts
         shell: pwsh
         run: |

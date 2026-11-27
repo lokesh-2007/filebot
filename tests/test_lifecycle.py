@@ -13,13 +13,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QTableWidget, QWidget
+from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QListWidgetItem, QPushButton, QTableWidget, QWidget
 
 from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
 from daemon.metrics import process_working_set_mb
 from ui.avatar_bubble import AvatarBubble
 from ui.popover_card import PopoverCard
+from ui.hotkey_bridge import HotkeyBridge
 from storage.db import Database
 
 
@@ -46,6 +47,39 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(manager.idle.isActive())
         manager.idle.stop()
 
+    def test_idle_sleep_closes_runtime_and_releases_active_resources(self) -> None:
+        class Closable:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class Popover:
+            hidden = False
+            closed = False
+
+            def hide(self) -> None:
+                self.hidden = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        manager = LifecycleManager({"runtime": {"idle_unload_seconds": 1}}, None, Path.cwd())
+        runtime, engine, popover = Closable(), Closable(), Popover()
+        manager.runtime, manager.engine, manager.popover = runtime, engine, popover
+        manager._active = True
+        manager.idle.start(1)
+        deadline = time.monotonic() + 2
+        while manager._active and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertFalse(manager._active)
+        self.assertTrue(runtime.closed)
+        self.assertTrue(engine.closed)
+        self.assertTrue(popover.hidden)
+        self.assertTrue(popover.closed)
+
     def test_wake_shows_loading_popover_before_runtime_initialization(self) -> None:
         class DelayedWakeWorker(QObject):
             ready = pyqtSignal(object, object, str)
@@ -70,6 +104,44 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(manager.popover.input.isEnabled())
         self.assertFalse(manager.popover.search_button.isEnabled())
         manager.shutdown()
+
+    def test_avatar_and_hotkey_activation_both_reach_wake_flow(self) -> None:
+        class DelayedWakeWorker(QObject):
+            ready = pyqtSignal(object, object, str)
+            finished = pyqtSignal()
+
+            def start(self) -> None:
+                pass
+
+            def isRunning(self) -> bool:
+                return False
+
+        class FakeDatabase:
+            def pending_commands(self):
+                return []
+
+        manager = LifecycleManager({"runtime": {"idle_unload_seconds": 60}}, FakeDatabase(), Path.cwd())
+        avatar = AvatarBubble()
+        bridge = HotkeyBridge("<ctrl>+<alt>+<space>")
+        avatar.toggled.connect(manager.toggle)
+        bridge.activated.connect(manager.toggle)
+        with patch("daemon.lifecycle_manager._WakeWorker", return_value=DelayedWakeWorker()):
+            avatar.show()
+            QTest.mouseClick(avatar, Qt.MouseButton.LeftButton)
+            self.app.processEvents()
+            self.assertTrue(manager._waking)
+            self.assertIsNotNone(manager.popover)
+            self.assertIn("Loading the local search index", manager.popover.answer.toPlainText())
+
+            bridge.activated.emit()
+            self.assertTrue(manager._cancel_wake)
+            manager._on_wake_ready(None, None, "canceled by test")
+            self.assertFalse(manager._waking)
+            bridge.activated.emit()
+            self.assertTrue(manager._waking)
+            manager._on_wake_ready(None, None, "canceled by test")
+            manager.shutdown()
+        avatar.close()
 
     def test_instance_guard_allows_only_one_process_owner(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
@@ -251,10 +323,13 @@ class LifecycleTests(unittest.TestCase):
         class FakeEngine:
             refreshed = False
 
-            def refresh_file_signal(self, _path: str) -> None:
+            def refresh_file_signal(self) -> None:
                 self.refreshed = True
 
         class FakeDatabase:
+            def pending_commands(self):
+                return []
+
             def record_file_feedback(self, _path: str, _vote: str) -> bool:
                 return True
 
@@ -270,6 +345,67 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(engine.refreshed)
         self.assertIn("Feedback saved", card.answer.toPlainText())
         card.close()
+
+    def test_result_activation_opens_indexed_file_and_records_feedback(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            root = Path(directory)
+            path = root / "selected.md"
+            path.write_text("retention policy", encoding="utf-8")
+            db = Database(root / "state.sqlite3")
+            db.initialize()
+            db.replace_file(path, content_hash="fixture", size=16, mtime=1.0,
+                            chunks=[{"text": "retention policy"}])
+            card = PopoverCard(engine=None, runtime=None, db=db)
+            card._received([{"path": str(path.resolve()), "snippet": "retention policy"}], "")
+            item = card.results.item(0)
+
+            with patch("agent.tools.file_ops_tool.os.startfile") as startfile:
+                card.open_result(item)
+                startfile.assert_called_once_with(str(path.resolve()))
+            card.results.setCurrentItem(item)
+            QTest.mouseClick(card.helpful_button, Qt.MouseButton.LeftButton)
+
+            self.assertEqual(db.file_signal_counts(path), (1, 1, 0))
+            card.close()
+
+    def test_command_approval_and_rejection_flow_through_real_audit_rows(self) -> None:
+        class PipeProcess:
+            def __init__(self) -> None:
+                from io import BytesIO
+                self.stdout = BytesIO(b"approved\n")
+                self.stderr = BytesIO(b"")
+
+            def wait(self, timeout=None) -> int:
+                return 0
+
+            def kill(self) -> None:
+                raise AssertionError("the fake command should finish before timeout")
+
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            db = Database(Path(directory) / "state.sqlite3")
+            db.initialize()
+            rejected = db.stage_command("whoami", directory, "inspect account", "read_only")
+            card = PopoverCard(engine=None, runtime=None, db=db)
+            reject = next(button for button in card.findChildren(QPushButton) if button.text() == "Reject")
+            with patch("executor.cmd_runner.subprocess.Popen") as process:
+                QTest.mouseClick(reject, Qt.MouseButton.LeftButton)
+                self.assertEqual(db.command_record(rejected)["status"], "rejected")
+                process.assert_not_called()
+
+                card.close()
+                approved = db.stage_command("whoami", directory, "inspect account", "read_only")
+                card = PopoverCard(engine=None, runtime=None, db=db)
+                approve = next(button for button in card.findChildren(QPushButton) if button.text() == "Approve")
+                process.return_value = PipeProcess()
+                QTest.mouseClick(approve, Qt.MouseButton.LeftButton)
+                deadline = time.monotonic() + 3
+                while card._command_task is not None and card._command_task.isRunning() and time.monotonic() < deadline:
+                    self.app.processEvents()
+                    time.sleep(0.01)
+                self.app.processEvents()
+
+            self.assertEqual(db.command_record(approved)["status"], "executed")
+            card.close()
 
     def test_popover_displays_chat_text_before_the_turn_finishes(self) -> None:
         class FakeDatabase:

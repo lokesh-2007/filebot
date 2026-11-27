@@ -31,6 +31,9 @@ still being validated.
 - Gated and blocked CMD proposals use the policy file, SQLite audit records, and
   explicit Approve/Reject UI controls; only the approved runner executes them.
 - Search result cards show paths, snippets, and available page/heading context.
+- Windows Qt integration tests now cover avatar and hotkey-bridge wake,
+  selected-file open and feedback persistence, CMD audit approval/rejection,
+  and idle resource unload. Existing Qt tests cover streamed chat and cancel.
 
 ## Remaining product requirements
 
@@ -38,8 +41,9 @@ still being validated.
   deterministic SQLite lexical fixture now checks edited glossary expansion
   and same-session feedback ranking, but semantic ranking on a real local
   corpus remains unvalidated.
-- Add end-to-end Windows tests for hotkey/avatar wake, direct open, streamed
-  chat, command approval/rejection, cancellation, and idle unload.
+- Verify the new Windows UI acceptance flows in CI and add live
+  Ollama/physical-keyboard coverage for streamed chat, cancellation, and
+  wake-to-idle behavior.
 - Measure cold startup, wake-to-search, wake-to-first-token, peak and dormant
   working set, and idle unload on supported Windows machines. The PDF's RAM and
   latency targets are goals, not measured claims yet.

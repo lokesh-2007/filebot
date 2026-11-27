@@ -175,9 +175,9 @@ class HybridEngine:
         if self._bm25 is not None and self._tokens is not None and self._rows:
             try:
                 tokens = __import__("bm25s").tokenize([query], stopwords="en")
-                _, indexes = self._bm25.retrieve(tokens, k=min(take, len(self._rows)))
-                for index in indexes[0]:
-                    if int(index) >= 0:
+                indexes, scores = self._bm25.retrieve(tokens, k=min(take, len(self._rows)))
+                for index, score in zip(indexes[0], scores[0]):
+                    if int(index) >= 0 and float(score) > 0.0:
                         row = self._rows[int(index)]
                         key = str(row["chunk_id"])
                         lexical.append(key)
