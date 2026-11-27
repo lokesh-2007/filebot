@@ -3,16 +3,51 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 from agent.bot_runtime import BotRuntime
+from agent.tools.search_tool import SearchFilesTool
 from storage.db import Database
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChatContextTests(unittest.TestCase):
+    def test_retrieved_prompt_context_is_bounded_and_keeps_source_paths(self) -> None:
+        hits = [
+            {"path": rf"C:\Docs\source-{index}.md", "snippet": "evidence " * 1000}
+            for index in range(8)
+        ]
+
+        context = BotRuntime._format_local_file_context(hits)
+        serialized = context.split("paths):\n", 1)[1]
+        entries = json.loads(serialized)
+
+        self.assertLessEqual(len(serialized), 6000)
+        self.assertEqual(entries[0]["path"], r"C:\Docs\source-0.md")
+        self.assertLessEqual(len(entries), 8)
+
+    def test_model_search_tool_caps_result_count_and_excerpt_size(self) -> None:
+        class Engine:
+            def __init__(self) -> None:
+                self.limit = None
+
+            def search(self, _query, limit):
+                self.limit = limit
+                return [
+                    {"path": f"doc-{index}.txt", "snippet": "x" * 2000}
+                    for index in range(15)
+                ]
+
+        engine = Engine()
+        results = SearchFilesTool(engine).execute("documents", limit=50)
+
+        self.assertEqual(engine.limit, 10)
+        self.assertEqual(len(results), 10)
+        self.assertTrue(all(len(item["snippet"]) == 1200 for item in results))
+
     def test_chat_history_is_session_scoped_bounded_and_persistent(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             database_path = Path(directory) / "state.sqlite3"

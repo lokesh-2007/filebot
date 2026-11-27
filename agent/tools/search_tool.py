@@ -13,4 +13,14 @@ class SearchFilesTool:
         self.engine = engine
 
     def execute(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self.engine.search(query, max(1, min(int(limit), 50)))
+        bounded_limit = max(1, min(int(limit), 10))
+        matches = self.engine.search(query, bounded_limit)
+        bounded: list[dict[str, Any]] = []
+        for match in matches[:bounded_limit]:
+            if not isinstance(match, dict):
+                continue
+            item = dict(match)
+            if "snippet" in item:
+                item["snippet"] = str(item["snippet"])[:1200]
+            bounded.append(item)
+        return bounded

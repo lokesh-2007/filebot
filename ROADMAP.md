@@ -25,9 +25,10 @@ still being validated.
   line ranges; setup caches grammars so indexing stays offline.
 - The dedicated Search action queries the local index without Ollama. Chat
   requests retrieve relevant excerpts before generation and can call the local
-  search tool for follow-up evidence. Explicitly named indexed-file opens still
-  bypass Ollama; file opening rechecks index membership and configured-root
-  containment.
+  search tool for follow-up evidence. Prompt evidence is capped at 6,000
+  characters and model tool results at ten excerpts to protect the configured
+  local-model context window. Explicitly named indexed-file opens still bypass
+  Ollama; file opening rechecks index membership and configured-root containment.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.
