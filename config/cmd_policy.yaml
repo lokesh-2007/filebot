@@ -26,3 +26,24 @@ blocked:
   - '[%!]'
   - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip)\b'
   - '^\s*(?:del|erase|rmdir|rd)\s+.*(?:/s|/q|/f)'
+powershell:
+  # Windows PowerShell 5.1 only. Every command still requires visible approval.
+  # Keep to single cmdlets: no pipelines, chaining, redirection, expressions,
+  # scripts, aliases for destructive commands, or implicit default allow.
+  read_only:
+    - '^\s*(?:Get-ChildItem|gci|dir|ls)(?:\s+[^;&|<>`$]*)?\s*$'
+    - '^\s*(?:Get-Location|gl|pwd)\s*$'
+    - '^\s*(?:Get-Process|gps|ps)(?:\s+[^;&|<>`$]*)?\s*$'
+    - '^\s*(?:Get-Service|gsv)(?:\s+[^;&|<>`$]*)?\s*$'
+    - '^\s*(?:Get-Date|Get-Command|Get-Help)(?:\s+[^;&|<>`$]*)?\s*$'
+    - '^\s*(?:Get-Content|gc|cat|type)\s+[^;&|<>`$]+\s*$'
+  gated:
+    - '^\s*(?:New-Item|ni)\s+-(?:ItemType|Type)\s+Directory\b[^;&|<>`$]*$'
+    - '^\s*(?:Copy-Item|cp|copy)\s+[^;&|<>`$]+\s*$'
+    - '^\s*(?:Move-Item|mv|move)\s+[^;&|<>`$]+\s*$'
+    - '^\s*(?:Rename-Item|ren)\s+[^;&|<>`$]+\s*$'
+  blocked:
+    - '[;&|<>`\r\n]'
+    - '\$[({]'
+    - '\b(?:Remove-Item|ri|rm|del|erase|rmdir|rd|Clear-Content|Set-Content|Add-Content|Invoke-Expression|iex|Invoke-Command|icm|Start-Process|saps|Stop-Process|kill|Set-ExecutionPolicy|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Install-Module|Install-Package|Start-BitsTransfer|Register-ScheduledTask|New-Service|Restart-Computer|Stop-Computer|Format-Volume|Clear-Disk)\b'
+    - '^\s*(?:powershell|pwsh)(?:\.exe)?\s+.*(?:-EncodedCommand|-Command|-File)'

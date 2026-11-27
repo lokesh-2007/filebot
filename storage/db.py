@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS cmd_audit (
     proposal_id TEXT PRIMARY KEY,
     session_key TEXT NOT NULL DEFAULT '',
     command TEXT NOT NULL,
+    shell TEXT NOT NULL DEFAULT 'cmd' CHECK(shell IN ('cmd', 'powershell')),
     cwd TEXT NOT NULL DEFAULT '',
     reason TEXT NOT NULL DEFAULT '',
     risk_level TEXT NOT NULL CHECK(risk_level IN ('read_only', 'gated', 'blocked')),
@@ -162,6 +163,14 @@ class Database:
                 columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(dirty_queue)")}
                 if "available_at" not in columns:
                     connection.execute("ALTER TABLE dirty_queue ADD COLUMN available_at REAL NOT NULL DEFAULT 0")
+                command_columns = {
+                    str(row["name"]) for row in connection.execute("PRAGMA table_info(cmd_audit)")
+                }
+                if "shell" not in command_columns:
+                    connection.execute(
+                        "ALTER TABLE cmd_audit ADD COLUMN shell TEXT NOT NULL DEFAULT 'cmd' "
+                        "CHECK(shell IN ('cmd', 'powershell'))"
+                    )
         except sqlite3.Error as exc:
             raise RuntimeError(f"Could not initialize FileBot database at {self.path}: {exc}") from exc
 
@@ -527,12 +536,17 @@ class Database:
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
                 WHERE {clause} LIMIT ?""", (*terms, limit)))
 
-    def stage_command(self, command: str, cwd: str, reason: str, risk: str, status: str = "pending") -> str:
+    def stage_command(
+        self, command: str, cwd: str, reason: str, risk: str, status: str = "pending",
+        *, shell: str = "cmd",
+    ) -> str:
         """Create an immutable audit proposal and return its identifier."""
+        if shell not in {"cmd", "powershell"}:
+            raise ValueError("shell must be 'cmd' or 'powershell'")
         proposal_id = str(uuid.uuid4())
         with self.connect() as connection:
-            connection.execute("""INSERT INTO cmd_audit(proposal_id,command,cwd,reason,risk_level,status,created_at)
-                VALUES(?,?,?,?,?,?,strftime('%s','now'))""", (proposal_id,command,cwd,reason,risk,status))
+            connection.execute("""INSERT INTO cmd_audit(proposal_id,command,shell,cwd,reason,risk_level,status,created_at)
+                VALUES(?,?,?,?,?,?,?,strftime('%s','now'))""", (proposal_id,command,shell,cwd,reason,risk,status))
         return proposal_id
 
     def pending_commands(self) -> list[sqlite3.Row]:

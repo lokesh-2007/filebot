@@ -41,8 +41,9 @@ class CommandRunner:
         row = self.db.claim_approved_command(proposal_id)
         if row is None:
             raise PermissionError("Command must have an explicit approved audit record")
+        shell = str(row["shell"] or "cmd")
         try:
-            current_risk = PolicyEngine(self.policy_path).classify(str(row["command"]))
+            current_risk = PolicyEngine(self.policy_path).classify(str(row["command"]), shell=shell)
         except Exception as exc:
             message = f"Could not verify the current command policy: {exc}"
             self.db.finish_command(proposal_id, 126, "", message)
@@ -53,15 +54,30 @@ class CommandRunner:
             return 126, "", message
         system_root = os.environ.get("SystemRoot")
         system32 = Path(system_root) / "System32" if system_root else None
-        if system32 is None or not system32.is_dir() or not (system32 / "cmd.exe").is_file():
+        if system32 is None or not system32.is_dir():
             message = "Windows System32 command processor is unavailable"
             self.db.finish_command(proposal_id, 126, "", message)
             return 126, "", message
 
         command = str(row["command"])
-        external_read_only = bool(re.match(
-            r"^\s*(?:where|whoami|systeminfo|ipconfig|tasklist)(?:\s|$)", command, re.IGNORECASE
-        ))
+        if shell == "powershell":
+            executable = system32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            argv = [str(executable), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+            external_read_only = False
+        elif shell == "cmd":
+            executable = system32 / "cmd.exe"
+            argv = [str(executable), "/d", "/s", "/c", command]
+            external_read_only = bool(re.match(
+                r"^\s*(?:where|whoami|systeminfo|ipconfig|tasklist)(?:\s|$)", command, re.IGNORECASE
+            ))
+        else:
+            message = "This terminal shell is not supported"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message
+        if not executable.is_file():
+            message = f"Windows {shell} executable is unavailable"
+            self.db.finish_command(proposal_id, 126, "", message)
+            return 126, "", message
         # Prevent a user folder or a modified PATH from shadowing approved
         # Windows utilities. These built-ins do not need the proposed cwd.
         cwd = system32 if external_read_only else (Path(row["cwd"]).expanduser() if row["cwd"] else Path.home())
@@ -73,7 +89,7 @@ class CommandRunner:
         output: dict[str, bytes] = {}
         try:
             process = subprocess.Popen(
-                [str(system32 / "cmd.exe"), "/d", "/s", "/c", command],
+                argv,
                 cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -81,7 +97,7 @@ class CommandRunner:
             for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
                 reader = threading.Thread(
                     target=lambda key=name, pipe=stream: output.__setitem__(key, _read_output_tail(pipe)),
-                    name=f"FileBotCMD-{name}", daemon=True,
+                    name=f"FileBot-{shell}-{name}", daemon=True,
                 )
                 readers.append(reader)
                 reader.start()

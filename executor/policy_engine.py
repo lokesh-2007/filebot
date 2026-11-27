@@ -31,10 +31,22 @@ class PolicyEngine:
                 raise RuntimeError(f"Command policy contains an invalid {key!r} regular expression: {exc}") from exc
         self.default = "blocked"
         self.patterns = patterns
+        powershell = data.get("powershell", {})
+        if not isinstance(powershell, dict):
+            raise RuntimeError("Command policy 'powershell' section must be a mapping")
+        self.powershell_patterns: dict[str, list[re.Pattern[str]]] = {}
+        for key in ("blocked", "read_only", "gated"):
+            entries = powershell.get(key, [])
+            if not isinstance(entries, list) or any(not isinstance(item, str) for item in entries):
+                raise RuntimeError(f"PowerShell policy {key!r} entries must be a list of strings")
+            try:
+                self.powershell_patterns[key] = [re.compile(item, re.IGNORECASE) for item in entries]
+            except re.error as exc:
+                raise RuntimeError(f"PowerShell policy contains an invalid {key!r} expression: {exc}") from exc
 
-    def classify(self, command: str) -> str:
+    def classify(self, command: str, *, shell: str = "cmd") -> str:
         """Return blocked, read_only, or gated for a non-empty command."""
-        if len(command) > MAX_COMMAND_LENGTH:
+        if shell not in {"cmd", "powershell"} or len(command) > MAX_COMMAND_LENGTH:
             return "blocked"
         value = command.strip()
         # Windows CMD treats CR/LF as command boundaries. Reject all ASCII
@@ -43,10 +55,11 @@ class PolicyEngine:
         if not value or any(ord(character) < 0x20 or ord(character) == 0x7F
                             for character in value):
             return "blocked"
-        for pattern in self.patterns["blocked"]:
+        patterns = self.patterns if shell == "cmd" else self.powershell_patterns
+        for pattern in patterns["blocked"]:
             if pattern.search(value):
                 return "blocked"
         for level in ("read_only", "gated"):
-            if any(pattern.fullmatch(value) for pattern in self.patterns[level]):
+            if any(pattern.fullmatch(value) for pattern in patterns[level]):
                 return level
         return self.default

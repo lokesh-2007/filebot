@@ -17,6 +17,7 @@ from unittest.mock import call, patch
 
 from agent.fast_router import FastRouter
 from agent.bot_runtime import BotRuntime, _ensure_filebot_instructions, _nanobot_config_payload
+from agent.tools.cmd_proposal_tool import ProposePowerShellTool
 from executor.cmd_runner import CommandRunner, _read_output_tail
 from executor.policy_engine import PolicyEngine
 from retrieval.index_worker import IndexQueueService, IndexWorker
@@ -188,6 +189,23 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(row["exit_code"], 0)
         self.assertEqual(row["stdout_tail"], "tester\n")
 
+    def test_legacy_command_audit_migrates_to_cmd_shell(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "legacy.sqlite3"
+            connection = sqlite3.connect(path)
+            with connection:
+                connection.execute(
+                    "CREATE TABLE cmd_audit (proposal_id TEXT PRIMARY KEY, status TEXT, created_at REAL)"
+                )
+                connection.execute(
+                    "INSERT INTO cmd_audit(proposal_id,status,created_at) VALUES('legacy','pending',1)"
+                )
+            connection.close()
+            migrated = Database(path)
+            migrated.initialize()
+
+            self.assertEqual(migrated.command_record("legacy")["shell"], "cmd")
+
     def test_crash_recovery_requires_reapproval_and_never_replays_claimed_command(self) -> None:
         approved_not_claimed = self.db.stage_command(
             "mkdir not-started", str(self.root), "create a folder", "gated",
@@ -237,6 +255,62 @@ class DatabaseTests(unittest.TestCase):
         audit = self.db.command_record(proposal)
         self.assertEqual(audit["status"], "failed")
         self.assertEqual(audit["exit_code"], 124)
+
+    def test_approved_powershell_runs_through_its_separate_audited_executable(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            system32 = Path(directory) / "System32"
+            executable = system32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"test stub")
+            proposal = self.db.stage_command(
+                "Get-ChildItem Downloads", directory, "List the Downloads folder", "read_only",
+                shell="powershell",
+            )
+            self.assertEqual(self.db.command_record(proposal)["shell"], "powershell")
+            self.assertTrue(self.db.decide_command(proposal, True))
+            with patch.dict(os.environ, {"SystemRoot": directory}), patch(
+                "executor.cmd_runner.subprocess.Popen", return_value=_FakeCommandProcess(),
+            ) as run:
+                code, stdout, _ = CommandRunner(self.db).execute(proposal)
+
+            self.assertEqual((code, stdout), (0, "tester\n"))
+            args = run.call_args.args[0]
+            self.assertEqual(Path(args[0]), executable)
+            self.assertEqual(args[1:4], ["-NoLogo", "-NoProfile", "-NonInteractive"])
+            self.assertEqual(args[4:], ["-Command", "Get-ChildItem Downloads"])
+            self.assertEqual(self.db.command_record(proposal)["status"], "executed")
+
+    def test_powershell_policy_allows_only_single_approved_cmdlets(self) -> None:
+        policy = PolicyEngine(ROOT / "config" / "cmd_policy.yaml")
+
+        self.assertEqual(policy.classify("Get-ChildItem Downloads", shell="powershell"), "read_only")
+        self.assertEqual(policy.classify("Get-Content notes.txt", shell="powershell"), "read_only")
+        self.assertEqual(
+            policy.classify("New-Item -ItemType Directory -Path reports", shell="powershell"), "gated",
+        )
+        for command in (
+            "Remove-Item important.txt", "Invoke-Expression harmless", "Get-ChildItem; Remove-Item x",
+            "Get-ChildItem $(Remove-Item x)", "unknown-command",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(policy.classify(command, shell="powershell"), "blocked")
+        self.assertEqual(policy.classify("Get-ChildItem", shell="unknown"), "blocked")
+
+    def test_powershell_proposal_is_audited_and_stays_pending_until_approval(self) -> None:
+        tool = ProposePowerShellTool(PolicyEngine(ROOT / "config" / "cmd_policy.yaml"), self.db)
+        proposal = tool.propose("Get-ChildItem Downloads", "List a folder", str(self.root))
+        row = self.db.command_record(proposal["proposal_id"])
+
+        self.assertEqual(proposal["risk_level"], "read_only")
+        self.assertEqual(proposal["status"], "pending")
+        self.assertEqual(row["shell"], "powershell")
+        self.assertEqual(row["status"], "pending")
+        self.assertIsNone(self.db.claim_approved_command(proposal["proposal_id"]))
+
+        blocked = tool.propose("Remove-Item important.txt", "delete a file", str(self.root))
+        blocked_row = self.db.command_record(blocked["proposal_id"])
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked_row["status"], "blocked")
 
     def test_command_is_rechecked_against_current_policy_after_approval(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
@@ -389,7 +463,8 @@ class DatabaseTests(unittest.TestCase):
         class FakeLoop:
             def __init__(self) -> None:
                 self.tools = Registry([
-                    "search_files", "open_file", "read_file", "list_files", "create_file", "propose_cmd",
+                    "search_files", "open_file", "read_file", "list_files", "create_file",
+                    "propose_cmd", "propose_powershell",
                 ])
 
         class FakeBot:
@@ -420,6 +495,7 @@ class DatabaseTests(unittest.TestCase):
             "list": Registry(["list_files"]),
             "create": Registry(["create_file", "list_files", "read_file", "search_files"]),
             "cmd": Registry(["propose_cmd"]),
+            "powershell": Registry(["propose_powershell"]),
         }
         def run_immediate(coroutine, *, timeout=None):
             del timeout
@@ -436,6 +512,7 @@ class DatabaseTests(unittest.TestCase):
                 self.assertEqual(runtime.ask("Open the PDF document"), "Hello")
                 self.assertEqual(runtime.ask("Read this report"), "Hello")
                 self.assertEqual(runtime.ask("Run command whoami"), "Hello")
+                self.assertEqual(runtime.ask("Use PowerShell to show running processes"), "Hello")
                 result = runtime._run_agent("list", bot.run("Show me folder contents"))
                 self.assertEqual(runtime._answer_text(result), "Hello")
                 result = runtime._run_agent("create", bot.run("Create a notes file"))
@@ -449,7 +526,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(bot.seen_tools, [
             ["list_files", "read_file", "search_files"],
             ["open_file", "read_file", "search_files"],
-            ["list_files", "read_file", "search_files"], ["propose_cmd"],
+            ["list_files", "read_file", "search_files"], ["propose_cmd"], ["propose_powershell"],
             ["list_files"], ["create_file", "list_files", "read_file", "search_files"],
         ])
         self.assertIs(bot._loop.tools, full_registry)
@@ -784,6 +861,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertIn("create_file", instructions)
             self.assertIn("confirmation", instructions)
             self.assertIn("propose_cmd", instructions)
+            self.assertIn("propose_powershell", instructions)
             (workspace / "SOUL.md").write_text("User customized instructions", encoding="utf-8")
             _ensure_filebot_instructions(workspace)
             self.assertEqual((workspace / "SOUL.md").read_text(encoding="utf-8"),

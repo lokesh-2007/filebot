@@ -18,6 +18,12 @@ class FastRouter:
         re.I,
     )
     _search = re.compile(r"\b(find|search|locate|where is|look for)\b", re.I)
+    _powershell_request = re.compile(
+        r"\b(?:use|run|execute)\s+(?:windows\s+)?(?:powershell|pwsh)\b"
+        r"|^\s*(?:powershell|pwsh)\s+(?:-command\s+)?"
+        r"|^\s*(?:Get|New|Copy|Move|Rename|Set|Start|Stop|Test|Select|Where|Measure|Format|Out|Write|Read|Import|Export)-[A-Za-z][\w-]*\b",
+        re.I,
+    )
     _delete_file = re.compile(r"\b(?:delete|remove|trash)\b", re.I)
     _create_file = re.compile(
         r"^\s*(?:(?:please|i need you to|i need to|i want you to|i want to|"
@@ -134,6 +140,8 @@ class FastRouter:
 
     def route(self, prompt: str) -> str:
         """Route prompt intent; CMD and delete remain behind explicit confirmations."""
+        if self._powershell_request.search(prompt):
+            return "powershell"
         if self._cmd.search(prompt):
             return "cmd"
         if self._confirm_delete.search(prompt):

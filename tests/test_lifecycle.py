@@ -473,6 +473,20 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(db.command_record(approved)["status"], "executed")
             card.close()
 
+    def test_pending_powershell_proposal_is_labeled_before_approval(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            db = Database(Path(directory) / "state.sqlite3")
+            db.initialize()
+            db.stage_command("Get-Date", directory, "Show the current date", "read_only", shell="powershell")
+
+            card = PopoverCard(engine=None, runtime=None, db=db)
+            labels = [label.text() for label in card.findChildren(QLabel)]
+
+            self.assertTrue(any("Pending PowerShell · read_only" in label for label in labels))
+            self.assertTrue(any(button.text() == "Approve" for button in card.findChildren(QPushButton)))
+            self.assertTrue(any(button.text() == "Reject" for button in card.findChildren(QPushButton)))
+            card.close()
+
     def test_popover_displays_chat_text_before_the_turn_finishes(self) -> None:
         class FakeDatabase:
             def pending_commands(self):

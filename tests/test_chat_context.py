@@ -25,6 +25,9 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(router.route("Run `whoami`"), "cmd")
         self.assertEqual(router.route("Run the tests"), "cmd")
         self.assertEqual(router.route("Find and run a command"), "cmd")
+        self.assertEqual(router.route("Use PowerShell to show running processes"), "powershell")
+        self.assertEqual(router.route("Get-ChildItem Downloads"), "powershell")
+        self.assertEqual(router.route("What is PowerShell?"), "chat")
 
     def test_open_folder_request_routes_directly_without_chat_retrieval(self) -> None:
         router = FastRouter()

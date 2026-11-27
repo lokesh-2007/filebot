@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from agent.fast_router import FastRouter
 from agent.ollama_tool_bridge import install_ollama_tool_bridge
-from agent.tools.cmd_proposal_tool import ProposeCmdTool
+from agent.tools.cmd_proposal_tool import ProposeCmdTool, ProposePowerShellTool
 from agent.tools.file_ops_tool import FileOpsTool
 from agent.tools.search_tool import SearchFilesTool
 from filebot_config import expand_config_path, path_is_within_roots
@@ -27,7 +27,7 @@ from retrieval.index_worker import IndexWorker
 
 log = logging.getLogger(__name__)
 
-_FILEBOT_SOUL = """You are FileBot, a local Windows file search and CMD proposal assistant.
+_FILEBOT_SOUL = """You are FileBot, a local Windows file and terminal assistant.
 
 Answer ordinary questions directly and briefly. For questions about the user's
 files, use the supplied local search context and search_files as needed; cite
@@ -39,11 +39,11 @@ token before the exact file is moved to the Windows Recycle Bin. Its tools are
 search_files (search the local indexed files), read_file (read bounded text from
 an indexed file), list_files (list one configured folder), create_file (create
 a new text file without overwriting), open_file (open an existing indexed file),
-and propose_cmd (stage a command for explicit approval in the UI).
+and propose_cmd or propose_powershell (stage a command for explicit approval in the UI).
 Use a tool only when it matches the user's request. Never invent tool calls,
 emit JSON that imitates a tool call, or claim an action succeeded unless the
 tool actually ran. If a request needs an unavailable action, say so clearly.
-All CMD execution requires the user's separate Approve click.
+All CMD and PowerShell execution requires the user's separate Approve click.
 """
 _CHAT_CONTEXT_CHAR_BUDGET = 6000
 
@@ -241,6 +241,7 @@ class BotRuntime:
         search = SearchFilesTool(self.engine)
         file_ops = FileOpsTool(self.db, roots=settings["index"]["roots"])
         proposal = ProposeCmdTool(self.policy, self.db)
+        powershell_proposal = ProposePowerShellTool(self.policy, self.db)
 
         @tool_parameters({"type": "object", "properties": {"query": {"type": "string"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "required": ["query"]})
@@ -308,9 +309,20 @@ class BotRuntime:
             @property
             def name(self) -> str: return "propose_cmd"
             @property
-            def description(self) -> str: return "Classify and stage a CMD proposal. Never execute a command."
+            def description(self) -> str: return "Stage a policy-checked CMD proposal for approval. Never execute it."
             async def execute(self, command: str, reason: str, cwd: str | None = None) -> str:
                 return json.dumps(proposal.propose(command, reason, cwd), ensure_ascii=False)
+
+        @tool_parameters({"type": "object", "properties": {"command": {"type": "string"},
+            "reason": {"type": "string"}, "cwd": {"type": "string"}}, "required": ["command", "reason"]})
+        class ProposePowerShell(Tool):
+            @property
+            def name(self) -> str: return "propose_powershell"
+            @property
+            def description(self) -> str:
+                return "Stage one allowlisted Windows PowerShell cmdlet for explicit approval. Never execute it."
+            async def execute(self, command: str, reason: str, cwd: str | None = None) -> str:
+                return json.dumps(powershell_proposal.propose(command, reason, cwd), ensure_ascii=False)
 
         registry.register(SearchTool())
         registry.register(OpenTool())
@@ -318,6 +330,7 @@ class BotRuntime:
         registry.register(ListFilesTool())
         registry.register(CreateFileTool())
         registry.register(ProposeTool())
+        registry.register(ProposePowerShell())
         loop = AgentLoop.from_config(config, tool_registry=registry)
         # Nanobot treats "*" as a literal skill name, so disabled_skills=["*"]
         # still adds every bundled skill description to each system prompt.
@@ -328,7 +341,8 @@ class BotRuntime:
         # ToolLoader also discovers Nanobot defaults. Enforce an allowlist after
         # construction so disabled settings or future upstream tools cannot widen access.
         allowed_tools = {
-            "search_files", "open_file", "read_file", "list_files", "create_file", "propose_cmd",
+            "search_files", "open_file", "read_file", "list_files", "create_file",
+            "propose_cmd", "propose_powershell",
         }
         for name in tuple(loop.tools.tool_names):
             if name not in allowed_tools:
@@ -345,6 +359,7 @@ class BotRuntime:
             "list": {"list_files"},
             "create": {"search_files", "read_file", "list_files", "create_file"},
             "cmd": {"propose_cmd"},
+            "powershell": {"propose_powershell"},
         }.items():
             scoped_registry = ToolRegistry()
             for name in sorted(names):
@@ -365,9 +380,11 @@ class BotRuntime:
         self._activate()
         self._raise_if_cancelled()
         assert self.bot is not None
-        if intent == "cmd":
-            prompt = ("The user is asking for a Windows CMD action. Never execute commands or use any shell. "
-                      "If a command is appropriate, call propose_cmd with only the command and a short reason. "
+        if intent in {"cmd", "powershell"}:
+            shell = "Windows PowerShell" if intent == "powershell" else "Windows CMD"
+            tool_name = "propose_powershell" if intent == "powershell" else "propose_cmd"
+            prompt = (f"The user is asking for a {shell} action. Never execute commands or use any shell directly. "
+                      f"If the request is supported by the policy, call {tool_name} with one command and a short reason. "
                       "The application requires a separate explicit UI approval before execution. User request: " + prompt)
         if include_retrieval and intent in {"chat", "search", "open", "read", "create"}:
             try:
@@ -561,7 +578,7 @@ class BotRuntime:
         if _is_unexecuted_tool_text(content):
             return (
                 "FileBot did not run that action. I can answer questions, search or open indexed files, "
-                "and prepare a CMD proposal for your approval. File creation and editing are not supported."
+                "and prepare CMD or allowlisted PowerShell proposals for your approval."
             )
         if not content:
             stop_reason = str(getattr(result, "stop_reason", "") or "")

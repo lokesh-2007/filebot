@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add audited, explicit-approval Windows PowerShell proposals for allowlisted
+  inspection and basic file/folder commands. Preserve CMD approvals, block
+  PowerShell script/chaining/delete commands, and migrate old audit rows as CMD.
 - Open configured folders such as Downloads or a named folder inside OneDrive directly from the chat prompt without making a model request or adding retrieval context. Include Downloads in the default watched roots and follow Windows' redirected Documents folder.
 - Start each awake model session with a clean transcript and retry once after an old transcript fills the local context, while keeping the visible desktop chat history.
 

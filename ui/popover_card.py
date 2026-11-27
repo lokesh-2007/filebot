@@ -510,8 +510,13 @@ class PopoverCard(QWidget):
         for row in rows:
             card = QFrame()
             box = QVBoxLayout(card)
+            try:
+                shell = str(row["shell"] or "cmd")
+            except (IndexError, KeyError):
+                shell = "cmd"
+            shell_label = "PowerShell" if shell == "powershell" else "CMD"
             details = QLabel(
-                f"Pending CMD · {row['risk_level']}\n"
+                f"Pending {shell_label} · {row['risk_level']}\n"
                 f"Command: {row['command']}\n"
                 f"Reason: {row['reason']}\n"
                 f"Working directory: {row['cwd']}"

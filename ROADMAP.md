@@ -47,8 +47,11 @@ still being validated.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.
-- Gated and blocked CMD proposals use the policy file, SQLite audit records, and
-  explicit Approve/Reject UI controls; only the approved runner executes them.
+- Gated and blocked CMD and PowerShell proposals use shell-specific policies,
+  SQLite audit records, and explicit Approve/Reject UI controls; only the
+  approved runner executes them. PowerShell is currently limited to approved
+  single cmdlets; chaining, scripts, network/install commands, process launch,
+  and deletion remain blocked.
 - Search result cards show paths, snippets, and available page/heading context.
 - Windows Qt integration tests now cover chat-window and hotkey-bridge wake,
   selected-file open and feedback persistence, CMD audit approval/rejection,
