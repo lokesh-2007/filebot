@@ -53,12 +53,15 @@ index:
   chunk_chars: 1200
   chunk_overlap: 150
   debounce_seconds: 1.0
-  background_batch_size: 10
+  # Smaller chunks keep indexing memory and search lock times bounded.
+  background_batch_size: 4
   background_poll_seconds: 1.0
 
 # Optional search shorthand. For example, map "spec" to "product specification".
 retrieval:
   glossary: {}
+  # BM25 is held in memory; larger corpora use SQLite lexical fallback + vectors.
+  max_in_memory_chunks: 10000
 
 models:
   ollama:
@@ -77,7 +80,7 @@ models:
   embeddings:
     model: BAAI/bge-small-en-v1.5
     cache_dir: "~/.cache/filebot/fastembed"
-    batch_size: 16
+    batch_size: 8
   vector_store:
     path: "~/.filebot/chromadb"
 

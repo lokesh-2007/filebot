@@ -541,11 +541,23 @@ class BotRuntime:
                 "Install Ollama or set models.ollama.auto_start to false."
             )
         try:
+            ollama = self.settings.get("models", {}).get("ollama", {})
+            env = os.environ.copy()
+            # Keep the managed local server predictable on modest-memory PCs.
+            # Ollama multiplies context allocations for parallel requests and
+            # can otherwise keep several models loaded at once.
+            env.update({
+                "OLLAMA_MAX_LOADED_MODELS": "1",
+                "OLLAMA_NUM_PARALLEL": "1",
+                "OLLAMA_CONTEXT_LENGTH": str(int(ollama.get("num_ctx", 4096))),
+                "OLLAMA_KEEP_ALIVE": str(ollama.get("keep_alive", "2m")),
+            })
             self._ollama_process = subprocess.Popen(
                 [executable, "serve"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=env,
                 close_fds=True,
                 creationflags=0x08000000 if os.name == "nt" else 0,
             )

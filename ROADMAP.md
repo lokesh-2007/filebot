@@ -24,6 +24,13 @@ still being validated.
   run, so token-generation latency is not claimed to have improved.
 - Retrieval and Nanobot initialize on wake; Ollama starts on demand for model
   requests and unloads according to the configured keep-alive/lifecycle policy.
+- FileBot-managed Ollama starts with one loaded model, one parallel request,
+  and the configured context cap; embedding and background indexing batches are
+  kept small to reduce transient memory and retrieval lock time. The in-memory
+  BM25 corpus is capped at 10,000 chunks; larger corpora retain vector search
+  and use SQLite lexical fallback. The 3.5–4 GB product target is not yet a
+  measured or OS-enforced hard limit, especially when Ollama is already running
+  outside FileBot.
 - Background queue indexing runs in Windows background CPU and I/O priority,
   with bounded work batches and polling between batches.
 - PDF, DOCX, Markdown, and text parsing feed FastEmbed/ONNX, ChromaDB, and BM25

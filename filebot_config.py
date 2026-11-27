@@ -39,6 +39,12 @@ def load_settings(path: str | Path) -> dict[str, Any]:
         for alias, expansion in glossary.items()
     ):
         raise RuntimeError("FileBot setting 'retrieval.glossary' must map short aliases to non-empty expansions")
+    max_in_memory_chunks = _validate_number(
+        retrieval.get("max_in_memory_chunks", 10_000),
+        "retrieval.max_in_memory_chunks", minimum=1, integer=True,
+    )
+    if max_in_memory_chunks > 10_000:
+        raise RuntimeError("FileBot setting 'retrieval.max_in_memory_chunks' must be at most 10000")
     if not isinstance(index["roots"], list) or any(not isinstance(root, str) or not root.strip()
                                                   for root in index["roots"]):
         raise RuntimeError("FileBot setting 'index.roots' must be a list of non-empty paths")
@@ -72,7 +78,11 @@ def load_settings(path: str | Path) -> dict[str, Any]:
     if overlap >= chunk_chars:
         raise RuntimeError("FileBot setting 'index.chunk_overlap' must be smaller than 'index.chunk_chars'")
     _validate_number(index.get("debounce_seconds", 1.0), "index.debounce_seconds", minimum=0)
-    _validate_number(index.get("background_batch_size", 10), "index.background_batch_size", minimum=1, integer=True)
+    background_batch_size = _validate_number(
+        index.get("background_batch_size", 10), "index.background_batch_size", minimum=1, integer=True,
+    )
+    if background_batch_size > 10:
+        raise RuntimeError("FileBot setting 'index.background_batch_size' must be at most 10")
     _validate_number(index.get("background_poll_seconds", 1.0), "index.background_poll_seconds", minimum=0, exclusive=True)
     if not isinstance(settings["runtime"]["hotkey"], str) or not settings["runtime"]["hotkey"].strip():
         raise RuntimeError("FileBot setting 'runtime.hotkey' must be a non-empty string")
@@ -91,7 +101,11 @@ def load_settings(path: str | Path) -> dict[str, Any]:
         if missing:
             raise RuntimeError(f"FileBot settings section 'models.{section}' is missing: {', '.join(missing)}")
     embeddings = models["embeddings"]
-    _validate_number(embeddings.get("batch_size", 64), "models.embeddings.batch_size", minimum=1, integer=True)
+    embedding_batch_size = _validate_number(
+        embeddings.get("batch_size", 64), "models.embeddings.batch_size", minimum=1, integer=True,
+    )
+    if embedding_batch_size > 16:
+        raise RuntimeError("FileBot setting 'models.embeddings.batch_size' must be at most 16 for bounded memory use")
     ollama = models["ollama"]
     if "auto_start" in ollama and type(ollama["auto_start"]) is not bool:
         raise RuntimeError("FileBot setting 'models.ollama.auto_start' must be true or false")
@@ -100,6 +114,14 @@ def load_settings(path: str | Path) -> dict[str, Any]:
         "models.ollama.startup_timeout_seconds",
         minimum=1,
         integer=True,
+    )
+    num_ctx = _validate_number(
+        ollama.get("num_ctx", 4096), "models.ollama.num_ctx", minimum=512, integer=True,
+    )
+    if num_ctx > 4096:
+        raise RuntimeError("FileBot setting 'models.ollama.num_ctx' must be at most 4096 for the supported memory profile")
+    _validate_number(
+        ollama.get("num_predict", 256), "models.ollama.num_predict", minimum=1, integer=True,
     )
     return settings
 

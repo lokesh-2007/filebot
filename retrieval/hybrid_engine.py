@@ -13,6 +13,7 @@ from filebot_config import expand_config_path, path_is_within_roots
 from storage.db import Database
 
 log = logging.getLogger(__name__)
+_DEFAULT_MAX_BM25_CHUNKS = 10_000
 
 
 class HybridEngine:
@@ -26,6 +27,7 @@ class HybridEngine:
         self._restrict_roots = "roots" in settings.get("index", {})
         self._embedder = self._collection = self._client = None
         self._bm25 = self._tokens = self._corpus = self._rows = None
+        self._bm25_capped = False
         self._lock = threading.RLock()
 
     def activate(self) -> None:
@@ -54,7 +56,22 @@ class HybridEngine:
 
     def _refresh_bm25(self) -> None:
         with self._lock:
-            rows = self.db.all_chunks()
+            maximum = int(self.settings.get("retrieval", {}).get(
+                "max_in_memory_chunks", _DEFAULT_MAX_BM25_CHUNKS,
+            ))
+            rows = self.db.all_chunks(limit=maximum + 1)
+            if len(rows) > maximum:
+                self._rows = []
+                self._corpus = []
+                self._bm25 = self._tokens = None
+                if not self._bm25_capped:
+                    log.warning(
+                        "BM25 in-memory corpus exceeds the %d chunk limit; "
+                        "using SQLite lexical and persistent vector retrieval", maximum,
+                    )
+                self._bm25_capped = True
+                return
+            self._bm25_capped = False
             if self._restrict_roots:
                 rows = [row for row in rows if path_is_within_roots(row["path"], self.roots)]
             self._rows = rows
@@ -175,18 +192,37 @@ class HybridEngine:
             return self._search_short_token(normalized_query, limit)
         take = max(limit * 4, 20)
         dense: list[str] = []
+        dense_rows: list[dict[str, Any]] = []
         if self._embedder is not None and self._collection is not None:
             try:
                 vector = list(self._embedder.query_embed(query))[0].tolist()
                 result = self._collection.query(
                     query_embeddings=[vector], n_results=take, include=["documents", "metadatas"],
                 )
-                dense = [chunk_id for chunk_id in (result.get("ids") or [[]])[0]]
+                ids = (result.get("ids") or [[]])[0]
+                documents = (result.get("documents") or [[]])[0]
+                metadatas = (result.get("metadatas") or [[]])[0]
+                dense = [str(chunk_id) for chunk_id in ids]
+                for index, chunk_id in enumerate(dense):
+                    metadata = metadatas[index] if index < len(metadatas) else {}
+                    document = documents[index] if index < len(documents) else ""
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    dense_rows.append({
+                        "chunk_id": chunk_id,
+                        "path": str(metadata.get("path") or ""),
+                        "snippet": str(document or ""),
+                        "page_or_line": metadata.get("page_or_line"),
+                        "heading": metadata.get("heading"),
+                    })
             except Exception:
                 log.exception("Vector search failed; continuing with lexical retrieval")
         lexical: list[str] = []
         rows = list(self._rows or [])
         known_ids = {str(row["chunk_id"]) for row in rows}
+        for row in dense_rows:
+            if row["chunk_id"] not in known_ids:
+                rows.append(row)
+                known_ids.add(row["chunk_id"])
         if self._bm25 is not None and self._tokens is not None and self._rows:
             try:
                 tokens = __import__("bm25s").tokenize(
@@ -217,7 +253,12 @@ class HybridEngine:
         """Rank exact short-token hits in the already-loaded SQLite chunk rows."""
         pattern = re.compile(rf"(?<!\w){re.escape(query)}(?!\w)", re.IGNORECASE)
         matches: list[tuple[int, float, int, Any]] = []
-        for position, row in enumerate(self._rows or []):
+        rows = self._rows or []
+        if not rows:
+            rows = self.db.search_lexical(query, 2_000)
+        for position, row in enumerate(rows):
+            if self._restrict_roots and not path_is_within_roots(row["path"], self.roots):
+                continue
             text = f"{row['file_name']}\n{row['snippet']}"
             count = sum(1 for _ in pattern.finditer(text))
             if count:

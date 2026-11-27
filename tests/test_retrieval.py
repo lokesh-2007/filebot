@@ -18,6 +18,68 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReciprocalRankFusionTests(unittest.TestCase):
+    def test_large_corpus_uses_bounded_sqlite_fallback_instead_of_bm25_memory(self) -> None:
+        row = {"chunk_id": "older", "path": "older.txt", "file_name": "older.txt",
+               "snippet": "The older project contains the target phrase.",
+               "page_or_line": None, "heading": None}
+
+        class FakeDatabase:
+            def all_chunks(self, limit=None):
+                self.row_limit = limit
+                return [{**row, "chunk_id": f"chunk-{index}"} for index in range(limit)]
+
+            def search_lexical(self, _query, _limit):
+                return [row]
+
+        database = FakeDatabase()
+        engine = HybridEngine({"retrieval": {"max_in_memory_chunks": 2}}, database)
+        with self.assertLogs("retrieval.hybrid_engine", level="WARNING"):
+            engine._refresh_bm25()
+        results = engine.search("older project target")
+
+        self.assertEqual(database.row_limit, 3)
+        self.assertEqual(engine._rows, [])
+        self.assertIsNone(engine._bm25)
+        self.assertEqual([item["path"] for item in results], ["older.txt"])
+
+    def test_short_token_search_falls_back_to_sqlite_when_bm25_is_capped(self) -> None:
+        row = {"chunk_id": "h1", "path": "guide.md", "file_name": "guide.md",
+               "snippet": "Use an h1 heading here.", "page_or_line": None, "heading": None}
+
+        class FakeDatabase:
+            def search_lexical(self, query, limit):
+                self.query, self.limit = query, limit
+                return [row]
+
+        database = FakeDatabase()
+        engine = HybridEngine({"retrieval": {"max_in_memory_chunks": 1}}, database)
+        self.assertEqual([item["path"] for item in engine.search("h1")], ["guide.md"])
+        self.assertEqual(database.query, "h1")
+
+    def test_large_corpus_keeps_dense_vector_results_when_bm25_is_capped(self) -> None:
+        lexical_row = {"chunk_id": "lexical", "path": "older.txt", "file_name": "older.txt",
+                       "snippet": "Exact SQLite phrase", "page_or_line": None, "heading": None}
+
+        class FakeDatabase:
+            def all_chunks(self, limit=None):
+                return [{"chunk_id": f"chunk-{index}"} for index in range(limit)]
+
+            def search_lexical(self, _query, _limit):
+                return [lexical_row]
+
+        engine = HybridEngine({"retrieval": {"max_in_memory_chunks": 1}}, FakeDatabase())
+        engine._refresh_bm25()
+        engine._embedder = SimpleNamespace(
+            query_embed=lambda _query: [SimpleNamespace(tolist=lambda: [0.0])],
+        )
+        engine._collection = SimpleNamespace(query=lambda **_kwargs: {
+            "ids": [["dense"]], "documents": [["Semantic match"]],
+            "metadatas": [[{"path": "semantic.pdf"}]],
+        })
+
+        results = engine.search("semantic question")
+        self.assertEqual({item["path"] for item in results}, {"older.txt", "semantic.pdf"})
+
     def test_shared_high_rank_result_receives_both_votes(self) -> None:
         rows = [
             {"chunk_id": "a", "path": "a.txt", "snippet": "alpha", "page_or_line": None, "heading": None},
@@ -53,7 +115,7 @@ class ReciprocalRankFusionTests(unittest.TestCase):
                "heading": None, "open_count": 0, "upvotes": 0, "downvotes": 0}
 
         class FakeDatabase:
-            def all_chunks(self):
+            def all_chunks(self, limit=None):
                 return [row]
 
             def search_lexical(self, _query, _limit):
@@ -207,7 +269,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
         module.tokenize = tokenize
 
         class FakeDatabase:
-            def all_chunks(self):
+            def all_chunks(self, limit=None):
                 return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
                          "snippet": "matching terms", "page_or_line": None, "heading": None}]
 
@@ -232,7 +294,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
 
     def test_bm25_build_and_query_work_without_stdout(self) -> None:
         class FakeDatabase:
-            def all_chunks(self):
+            def all_chunks(self, limit=None):
                 return [{"chunk_id": "chunk", "path": "doc.txt", "file_name": "doc.txt",
                          "snippet": "matching terms", "page_or_line": None, "heading": None}]
 
@@ -324,7 +386,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
                         "snippet": "matching content", "page_or_line": None, "heading": None}
 
             class FakeDatabase:
-                def all_chunks(self):
+                def all_chunks(self, limit=None):
                     return [row(allowed / "in.txt", "inside"), row(outside / "old.txt", "outside")]
 
             engine = HybridEngine({"index": {"roots": [str(allowed)]}}, FakeDatabase())

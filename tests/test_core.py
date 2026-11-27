@@ -137,6 +137,17 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["path"], str(path.resolve()))
 
+    def test_chunk_loading_is_bounded_and_lexical_search_matches_filenames(self) -> None:
+        for name, text in (("agenda.txt", "unrelated text"), ("other.txt", "another note")):
+            self.db.replace_file(
+                self.root / name, content_hash=name, size=len(text), mtime=1.0,
+                chunks=[{"text": text}],
+            )
+
+        self.assertEqual(len(self.db.all_chunks(limit=1)), 1)
+        self.assertEqual(self.db.all_chunks(limit=1)[0]["file_name"], "agenda.txt")
+        self.assertEqual([row["file_name"] for row in self.db.search_lexical("agenda")], ["agenda.txt"])
+
     def test_open_and_feedback_signals_are_persisted(self) -> None:
         path = self.root / "feedback.md"
         self.db.replace_file(
@@ -491,6 +502,19 @@ class DatabaseTests(unittest.TestCase):
         ]) as tags, patch.object(runtime, "_start_ollama"):
             runtime._check_ollama_ready()
         self.assertEqual(tags.call_count, 2)
+
+    def test_managed_ollama_server_uses_single_model_and_single_parallel_request(self) -> None:
+        runtime = BotRuntime({"models": {"ollama": {
+            "model": "test-model", "num_ctx": 3072, "keep_alive": "1m",
+        }}}, self.db, object())
+        with patch("agent.bot_runtime.shutil.which", return_value="ollama.exe"), \
+                patch("agent.bot_runtime.subprocess.Popen") as launch:
+            runtime._start_ollama()
+        env = launch.call_args.kwargs["env"]
+        self.assertEqual(env["OLLAMA_MAX_LOADED_MODELS"], "1")
+        self.assertEqual(env["OLLAMA_NUM_PARALLEL"], "1")
+        self.assertEqual(env["OLLAMA_CONTEXT_LENGTH"], "3072")
+        self.assertEqual(env["OLLAMA_KEEP_ALIVE"], "1m")
 
     def test_plain_chat_does_not_wait_for_background_file_indexing(self) -> None:
         class FakeBot:

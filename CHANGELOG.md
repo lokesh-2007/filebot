@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Set conservative model concurrency and context limits for FileBot-managed
+  Ollama, reduce default embedding/index batches, and reject larger memory
+  settings that exceed the supported Python profile. Cap the in-memory BM25
+  index and retain vector/SQLite search for larger corpora.
 - Cache successful Ollama readiness checks briefly to remove a local HTTP
   round-trip from quick follow-up turns, then invalidate after inference errors.
   Show first-token wait feedback sooner and guide the model toward concise,

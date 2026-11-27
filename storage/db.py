@@ -498,14 +498,19 @@ class Database:
             )
             return [str(row[0]) for row in rows]
 
-    def all_chunks(self) -> list[sqlite3.Row]:
-        """Return chunk corpus records for the in-memory BM25 index."""
+    def all_chunks(self, limit: int | None = None) -> list[sqlite3.Row]:
+        """Return chunk rows, optionally bounded for the in-memory BM25 index."""
+        if limit is not None and limit < 1:
+            raise ValueError("chunk row limit must be positive")
         with self.connect() as connection:
-            return list(connection.execute("""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
+            query = """SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
                 COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
                 COALESCE(s.downvotes,0) AS downvotes
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
-                WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""))
+                WHERE f.status='indexed' ORDER BY f.file_id,c.chunk_index"""
+            if limit is None:
+                return list(connection.execute(query))
+            return list(connection.execute(query + " LIMIT ?", (limit,)))
 
     def indexed_file_chunks(
         self, path: str | Path, limit: int = 16, chars_per_chunk: int = 1200,
@@ -534,7 +539,8 @@ class Database:
                 COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
                 COALESCE(s.downvotes,0) AS downvotes
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
-                WHERE {clause} LIMIT ?""", (*terms, limit)))
+                WHERE f.status='indexed' AND (({clause}) OR f.file_name LIKE ?)
+                LIMIT ?""", (*terms, f"%{query}%", limit)))
 
     def stage_command(
         self, command: str, cwd: str, reason: str, risk: str, status: str = "pending",
