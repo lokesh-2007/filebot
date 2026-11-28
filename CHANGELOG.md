@@ -5,6 +5,8 @@
 - Improve SQLite fallback retrieval for exact filenames and filename-only
   queries by matching query terms in file names and ranking stronger name hits
   ahead of body-only matches. Record the measured 10k/100k latency tradeoff.
+- Document the local Rust verification boundary: format/check/clippy pass
+  offline, while running linked core tests requires the ONNX Runtime library.
 - Add a validated soft memory budget for managed Ollama. After a turn completes,
   FileBot requests model unload at 90% of the configured combined resident
   working-set budget; it does not interrupt the request or stop Ollama, and it

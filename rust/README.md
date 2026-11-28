@@ -64,6 +64,13 @@ cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
+The core and desktop crates can be type-checked offline with
+`ORT_SKIP_DOWNLOAD=1` when their Cargo dependencies are cached. Running the
+linked core test executable still requires a compatible ONNX Runtime library;
+without it, tests fail at the Windows linker with unresolved
+`OrtGetApiBase` symbols. A successful `cargo check` is not a substitute for
+executing those tests.
+
 Check the native Windows UI crate (the ONNX runtime binary download is not
 needed for type checking):
 

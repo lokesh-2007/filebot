@@ -164,6 +164,11 @@ still being validated.
   can record votes. A Rust glossary editor, cancellation during model-server
   startup, and Windows UI verification remain open. Keep Python as the default
   until parity and measurements pass.
+- In this Windows session, Rust formatting, offline core/desktop `cargo check`,
+  and both Clippy targets pass with `ORT_SKIP_DOWNLOAD=1`. Core tests compile
+  through the test crate but cannot link because the ONNX Runtime library is
+  unavailable (`OrtGetApiBase` unresolved); native Rust runtime behavior and
+  Windows UI flows therefore remain unverified here.
 - Package and validate a clean Windows install, including persistent settings,
   model setup, upgrades, and a signed installer before a general release.
 
