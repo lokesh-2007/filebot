@@ -11,13 +11,21 @@ class FastRouter:
     _cancel_delete = re.compile(r"\bcancel\s+delete\s+([a-f0-9]{8})\b", re.I)
     _cmd = re.compile(
         r"\b(?:use\s+cmd|command prompt|terminal command)\b"
+        r"|^\s*cmd(?:\.exe)?\s+(?:/[ck]\s+)?"
         r"|\b(?:run|execute)\s+(?:the\s+|this\s+|a\s+)?"
         r"(?:command|cmd|script|program|tests?|build|task|file)\b"
         r"|\b(?:run|execute)\s+(?:`[^`]+`|'[^']+'|\"[^\"]+\")"
-        r"|\brun\s+(?:whoami|dir|ipconfig|npm|python|git|cargo|pytest|powershell)\b",
+        r"|\brun\s+(?:whoami|dir|ipconfig|npm|python|git|cargo|pytest|powershell)\b"
+        r"|^\s*(?:(?:please|can you|could you|would you)\s+)?(?:run|execute)\s+"
+        r"(?!(?:me|the|a|an|through|for|by|with|over|on|this|that|it|away|late|fast)\b)"
+        r"[a-z_][\w.-]*(?:\s+.*)?$",
         re.I,
     )
-    _search = re.compile(r"\b(find|search|locate|where is|look for)\b", re.I)
+    _search = re.compile(
+        r"\b(?:find|search(?:\s+for)?|locate|look\s+for|look\s+up|"
+        r"track\s+down|where\s+(?:is|are|can\s+i\s+find))\b",
+        re.I,
+    )
     _powershell_request = re.compile(
         r"\b(?:use|run|execute)\s+(?:windows\s+)?(?:powershell|pwsh)\b"
         r"|^\s*(?:powershell|pwsh)\s+(?:-command\s+)?"
@@ -26,11 +34,19 @@ class FastRouter:
     )
     _delete_file = re.compile(r"\b(?:delete|remove|trash)\b", re.I)
     _create_file = re.compile(
-        r"^\s*(?:(?:please|i need you to|i need to|i want you to|i want to|"
-        r"can you|could you|would you)\s+)?(?:create|make|write|save)\b"
+        r"^\s*(?:(?:please|kindly|i need you to|i need to|i want you to|i want to|"
+        r"can you|could you|would you)\s+)?(?:create|make|write|save|generate)\b"
         r".{0,80}\b(?:new\s+)?file\b"
-        r"|^\s*(?:please\s+)?(?:create|make)\s+(?:a\s+)?(?:new\s+)?"
-        r"[\w ._-]+\.(?:txt|md|csv|json|ya?ml|py|js|ts|rs|html)\b",
+        r"|^\s*(?:(?:please|kindly|can you|could you|would you|i want you to|"
+        r"i need you to)\s+)?(?:create|make|write|save|generate)\s+(?:a\s+)?(?:new\s+)?"
+        r"[\w ._-]+\.[a-z0-9]{1,10}\b",
+        re.I,
+    )
+    _new_file = re.compile(
+        r"^\s*(?:(?:please|kindly|can you|could you|would you)\s+)?"
+        r"(?:start|begin)\s+(?:a\s+)?new\s+file\b|"
+        r"^\s*(?:(?:please|kindly|can you|could you|would you)\s+)?"
+        r"new\s+(?:text\s+)?file\b",
         re.I,
     )
     _named_create_target = re.compile(
@@ -40,9 +56,17 @@ class FastRouter:
         re.I,
     )
     _bare_create_target = re.compile(
-        r"^\s*(?:please\s+)?(?:create|make|write|save)\s+"
+        r"^\s*(?:(?:please|kindly|can you|could you|would you|"
+        r"i want you to|i need you to)\s+)?(?:create|make|write|save|generate)\s+"
         r"(?:(?:a|an|new|text|file)\s+){0,4}[\"'`]?"
         r"([^\"'`<>|?*\r\n]+?\.[a-z0-9]{1,10})"
+        r"(?=[\"'`]?(?:$|\s|[,!?]))",
+        re.I,
+    )
+    _new_file_target = re.compile(
+        r"^\s*(?:(?:please|kindly|can you|could you|would you)\s+)?"
+        r"(?:new\s+(?:text\s+)?file|(?:start|begin)\s+(?:a\s+)?new\s+file)\s+"
+        r"(?:(?:named|called)\s+)?[\"'`]?([^\"'`<>|?*\r\n]+?\.[a-z0-9]{1,10})"
         r"(?=[\"'`]?(?:$|\s|[,!?]))",
         re.I,
     )
@@ -60,47 +84,55 @@ class FastRouter:
     )
     _action_question = re.compile(
         r"^\s*(?:how|why|when|what|should\s+i|can\s+i)\b.*"
-        r"\b(?:delete|remove|trash|create|make|write|save|open|browse)\b",
+        r"\b(?:delete|remove|trash|create|make|write|save|open|browse|find|search|"
+        r"locate|list|read|summarize|show|run|execute|command|cmd|powershell|pwsh)\b",
         re.I,
     )
     _open_file = re.compile(
-        r"\b(?:open|view|show)\b.{0,48}\b(?:file|document|pdf|docx|notes?)\b"
-        r"|\b(?:open|view)\s+[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
+        r"\b(?:open|open\s+up|view|show|launch|pull\s+up|bring\s+up)\b.{0,48}"
+        r"\b(?:file|document|pdf|docx|notes?)\b"
+        r"|\b(?:open|open\s+up|view|launch|pull\s+up|bring\s+up)\s+"
+        r"[\"']?[\w./\\:-]+\.(?:txt|md|pdf|docx)\b",
         re.I,
     )
     _open_folder = re.compile(
-        r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\b"
+        r"\b(?:open|show|view|browse|go\s+to|navigate\s+to|take\s+me\s+to|bring\s+up)\b"
         r".{0,100}\b(?:folder|directory)\b",
         re.I,
     )
     _open_named_root = re.compile(
-        r"^\s*(?:please\s+)?(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
-        r"(?:(?:me|the|my)\s+)*(?:documents|downloads|desktop|onedrive)"
+        r"^\s*(?:(?:please|kindly|can you|could you|would you|"
+        r"i want you to|i need you to)\s+)?(?:open|show|view|browse|go\s+to|navigate\s+to|"
+        r"take\s+me\s+to|bring\s+up)\s+"
+        r"(?:(?:me|the|my)\s+)*(?P<root>documents|downloads|desktop|onedrive)"
         r"(?:\s+(?:folder|directory))?\s*[?.!]*$",
         re.I,
     )
     _read_file = re.compile(
-        r"\b(?:read|summari[sz]e)\b|\bwhat(?:'s| is)\s+in\b.{0,100}"
-        r"\.(?:txt|md|pdf|docx)\b",
+        r"\b(?:read|summari[sz]e|inspect|extract)\b|"
+        r"\bwhat(?:'s| is)\s+in\b.{0,100}\.(?:txt|md|pdf|docx)\b|"
+        r"\bwhat\s+does\s+.{1,100}\.(?:txt|md|pdf|docx)\s+(?:say|contain|include)\b",
         re.I,
     )
     _list_folder = re.compile(
         r"\blist(?:\s+(?:files|contents))?(?:\s+(?:in|of))?\b"
-        r"|\bwhat(?:'s| is)\s+in\b|\bwhat\s+files\s+(?:are\s+)?in\b"
+        r"|\bwhat(?:'s| is)\s+(?:in|inside)\b|\bwhat\s+files\s+(?:are\s+)?(?:in|inside)\b"
         r"|\bcontents\s+of\b"
         r"|\b(?:show|display|browse)\s+(?:me\s+)?(?:the\s+)?"
         r"(?:files|contents|items)\s+(?:in|of)\b",
         re.I,
     )
     _open_target = re.compile(
-        r"\b(?:(?:open|view|show|read|summari[sz]e)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:(?:attached|this|that|my)\s+)?(?:file\s+)?|what(?:'s| is)\s+in\s+)"
+        r"(?:\b(?:(?:open|open\s+up|view|show|launch|pull\s+up|bring\s+up|read|summari[sz]e|inspect|extract)"
+        r"\s+(?:me\s+)?(?:the\s+)?(?:(?:attached|this|that|my)\s+)?(?:file\s+)?|"
+        r"what(?:'s| is)\s+in\s+)|\bwhat\s+does\s+(?:the\s+)?(?:file\s+)?"
+        r")"
         r"[\"']?([^\"'<>|?*\r\n]+?\.[a-z0-9]{1,10})[\"']?(?=$|\s|[,!?])",
         re.I,
     )
     _list_target = re.compile(
         r"\b(?:list(?:\s+(?:files|contents))?(?:\s+(?:in|of))?|"
-        r"what(?:'s| is)\s+in|what\s+files\s+(?:are\s+)?in|contents\s+of|"
+        r"what(?:'s| is)\s+(?:in|inside)\b|what\s+files\s+(?:are\s+)?(?:in|inside)\b|contents\s+of|"
         r"(?:show|display|browse)\s+(?:me\s+)?(?:the\s+)?"
         r"(?:files|contents|items)\s+(?:in|of))\s*(?:the\s+|my\s+)?"
         r"(?P<path>[^?!]+?)\s*[?.!]*$",
@@ -146,13 +178,9 @@ class FastRouter:
         """Extract an explicit folder name/path from a direct open-folder request."""
         root = self._open_named_root.search(prompt.strip())
         if root is not None:
-            return re.sub(
-                r"^\s*(?:please\s+)?(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
-                r"(?:(?:me|the|my)\s+)*|\s+(?:folder|directory)\s*[?.!]*$",
-                "", prompt.strip(), flags=re.I,
-            ).strip()
+            return root.group("root")
         inside = re.search(
-            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to|take\s+me\s+to|bring\s+up)\s+"
             r"(?:(?:me|the|my)\s+)*(?P<path>.+?)\s+(?:folder|directory)\s+"
             r"(?:inside|in)\s+(?:my\s+)?(?:onedrive|documents|downloads|desktop)\s*[?.!]*$",
             prompt.strip(), re.I,
@@ -162,7 +190,7 @@ class FastRouter:
             target = re.sub(r"^(?:the|my)\s+", "", target, flags=re.I)
             return target or None
         match = re.search(
-            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+            r"\b(?:open|show|view|browse|go\s+to|navigate\s+to|take\s+me\s+to|bring\s+up)\s+"
             r"(?:(?:me|the|my)\s+)*(?P<path>.+?)\s+(?:folder|directory)\s*[?.!]*$",
             prompt.strip(), re.I,
         )
@@ -175,7 +203,11 @@ class FastRouter:
     def create_target(self, prompt: str) -> str | None:
         """Extract one explicit new-file path from a natural-language request."""
         text = prompt.strip()
-        match = self._named_create_target.search(text) or self._bare_create_target.search(text)
+        match = (
+            self._named_create_target.search(text)
+            or self._bare_create_target.search(text)
+            or self._new_file_target.search(text)
+        )
         if match is None:
             return None
         target = match.group(1).strip().strip("`\"").rstrip(".,;!? ")
@@ -194,7 +226,11 @@ class FastRouter:
     def create_needs_generated_content(self, prompt: str) -> bool:
         """Keep requests asking FileBot to author text on the model-backed create tool."""
         text = prompt.strip()
-        target = self._named_create_target.search(text) or self._bare_create_target.search(text)
+        target = (
+            self._named_create_target.search(text)
+            or self._bare_create_target.search(text)
+            or self._new_file_target.search(text)
+        )
         suffix = text[target.end():] if target is not None else text
         return bool(self._generated_file_content.search(suffix))
 
@@ -204,22 +240,21 @@ class FastRouter:
 
     def route(self, prompt: str) -> str:
         """Route prompt intent; CMD and delete remain behind explicit confirmations."""
+        if self._confirm_delete.search(prompt) or self._cancel_delete.search(prompt):
+            return "confirm_delete" if self._confirm_delete.search(prompt) else "cancel_delete"
+        if self._action_question.search(prompt):
+            return "chat"
         if self._powershell_request.search(prompt):
             return "powershell"
         if self._cmd.search(prompt):
             return "cmd"
-        if self._confirm_delete.search(prompt):
-            return "confirm_delete"
-        if self._cancel_delete.search(prompt):
-            return "cancel_delete"
-        if self._delete_file.search(prompt) and not self._action_question.search(prompt):
+        if self._delete_file.search(prompt):
             return "delete"
-        if self._create_file.search(prompt) and not self._action_question.search(prompt):
+        if self._create_file.search(prompt) or self._new_file.search(prompt):
             return "create"
-        if ((self._open_folder.search(prompt) or self._open_named_root.search(prompt))
-                and not self._action_question.search(prompt)):
+        if self._open_folder.search(prompt) or self._open_named_root.search(prompt):
             return "open_folder"
-        if self._search.search(prompt):
+        if self._search.search(prompt) and not self._action_question.search(prompt):
             return "search"
         if self._read_file.search(prompt):
             return "read"

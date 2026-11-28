@@ -147,6 +147,13 @@ still being validated.
   model tool. Existing root containment, extension, size, and no-overwrite
   checks apply. Chat, file-operation, and router regression tests cover both
   screenshots' failures.
+- The fast router also recognizes tested natural variants for local actions:
+  “locate my plan,” “what does guide.txt say?,” “what’s inside Downloads?,”
+  “bring up Downloads,” and “generate a new file called plan.md.” How-to
+  questions remain model conversations, while direct CMD and PowerShell
+  requests still enter their existing explicit approval flow. This tested
+  phrase set improves coverage but does not imply understanding every possible
+  wording; unmatched phrases remain conversational requests.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

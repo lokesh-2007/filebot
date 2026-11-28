@@ -91,6 +91,28 @@ class ChatContextTests(unittest.TestCase):
             )
         )
 
+    def test_action_routes_accept_natural_phrasing_and_keep_questions_conversational(self) -> None:
+        router = FastRouter()
+
+        self.assertEqual(router.route("Could you locate my budget plan?"), "search")
+        self.assertEqual(router.route("How do I find a file?"), "chat")
+        self.assertEqual(router.route("What does guide.txt say?"), "read")
+        self.assertEqual(router.open_target("What does guide.txt say?"), "guide.txt")
+        self.assertEqual(router.route("Please launch guide.pdf"), "open")
+        self.assertEqual(router.open_target("Please launch guide.pdf"), "guide.pdf")
+        self.assertEqual(router.route("What's inside Downloads?"), "list")
+        self.assertEqual(router.list_target("What's inside Downloads?"), "Downloads")
+        self.assertEqual(router.route("Could you take me to ChatGPT folder?"), "open_folder")
+        self.assertEqual(router.folder_target("Could you take me to ChatGPT folder?"), "ChatGPT")
+        self.assertEqual(router.route("Can you bring up Downloads?"), "open_folder")
+        self.assertEqual(router.folder_target("Can you bring up Downloads?"), "Downloads")
+        self.assertEqual(router.route("Could you generate a new file called plan.md?"), "create")
+        self.assertEqual(router.create_target("Could you generate a new file called plan.md?"), "plan.md")
+        self.assertEqual(router.route("New file draft.txt"), "create")
+        self.assertEqual(router.create_target("New file draft.txt"), "draft.txt")
+        self.assertEqual(router.route("How do I run the tests?"), "chat")
+        self.assertEqual(router.route("Use PowerShell to list files"), "powershell")
+
     def test_context_overflow_retries_once_in_a_fresh_session(self) -> None:
         runtime = BotRuntime({}, object(), object())
         calls: list[str] = []
