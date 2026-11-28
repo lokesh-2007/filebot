@@ -43,6 +43,9 @@ application passes the Windows UI and performance gates below.
   SQLite index membership. The agent has no shell execution or file-write tool.
 - A low-cost lifecycle supervisor starts dormant, handles wake/streamed turns,
   and unloads model resources after the configured idle interval.
+- The native transcript appends streamed deltas in place instead of replacing
+  the full text on every token. It retains at most 30,000 UTF-16 units and
+  trims back to 24,000 on overflow; trimming preserves Unicode code points.
 - Ollama context/generation limits and embedding batch size are configurable;
   defaults cap context at 4096 tokens, output at 256 tokens, and embedding
   batches at 16 chunks. Validation follows the Python-supported bounds: context

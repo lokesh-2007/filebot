@@ -176,6 +176,11 @@ still being validated.
   tests are present but could not be executed because the test binary cannot
   link ONNX Runtime (`OrtGetApiBase` is unresolved in this environment). Keep
   Python as the default until parity and measurements pass.
+- Rust chat streaming now appends deltas through the native edit control rather
+  than rebuilding the whole transcript per delta, then trims from 30,000 to
+  24,000 UTF-16 units while preserving complete Unicode characters. Pure trim
+  tests are compile-checked; native interaction and linked tests remain
+  unverified because ONNX Runtime cannot be linked in this environment.
 - In this Windows session, Rust formatting, offline core/desktop `cargo check`,
   and both Clippy targets pass with `ORT_SKIP_DOWNLOAD=1`. Core tests compile
   through the test crate but cannot link because the ONNX Runtime library is

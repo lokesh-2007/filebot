@@ -43,7 +43,8 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DispatchMessageW, ES_AUTOHSCROLL,
             ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
-            GetWindowLongPtrW, GetWindowRect, GetWindowTextW, HTCAPTION, HWND_TOPMOST, IDC_ARROW,
+            GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HTCAPTION,
+            HWND_TOPMOST, IDC_ARROW,
             IsWindowVisible, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LBN_DBLCLK,
             LBS_NOTIFY, LoadCursorW, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
             SWP_NOACTIVATE, SWP_NOSIZE, SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos,
@@ -486,21 +487,45 @@ fn set_output(state: &AppState, text: &str) {
 }
 
 fn append_output(hwnd: HWND, text: &str) {
-    // Keep the visible transcript bounded so long sessions cannot grow the UI buffer.
-    let mut current = vec![0u16; 32_768];
-    let len =
-        unsafe { GetWindowTextW(hwnd, current.as_mut_ptr(), current.len() as i32) }.max(0) as usize;
-    let mut content = String::from_utf16_lossy(&current[..len]);
-    content.push_str(text);
-    let mut utf16: Vec<u16> = content.encode_utf16().collect();
-    if utf16.len() > 30_000 {
-        utf16.drain(..utf16.len() - 30_000);
-    }
-    let content = String::from_utf16_lossy(&utf16);
-    let wide = wide(&content);
+    const MAX_TRANSCRIPT_UNITS: usize = 30_000;
+    const TRIMMED_TRANSCRIPT_UNITS: usize = 24_000;
+    // Avoid rebuilding the entire transcript for every streamed token. Keep the
+    // edit control read-only for users, temporarily enabling programmatic append.
+    let addition = wide(text);
     unsafe {
-        SetWindowTextW(hwnd, wide.as_ptr());
+        SendMessageW(hwnd, 0x00cf, 0, 0); // EM_SETREADONLY(FALSE)
+        let length = GetWindowTextLengthW(hwnd).max(0) as usize;
+        SendMessageW(hwnd, 0x00b1, length, length as LPARAM); // EM_SETSEL(end, end)
+        SendMessageW(hwnd, 0x00c2, 0, addition.as_ptr() as LPARAM); // EM_REPLACESEL
+        SendMessageW(hwnd, 0x00cf, 1, 0); // EM_SETREADONLY(TRUE)
+        let length = GetWindowTextLengthW(hwnd).max(0) as usize;
+        if length > MAX_TRANSCRIPT_UNITS {
+            let mut current = vec![0u16; length + 1];
+            let copied = GetWindowTextW(hwnd, current.as_mut_ptr(), current.len() as i32)
+                .max(0) as usize;
+            let content = String::from_utf16_lossy(&current[..copied]);
+            let retained = transcript_suffix(&content, TRIMMED_TRANSCRIPT_UNITS);
+            let retained_wide = wide(retained);
+            SetWindowTextW(hwnd, retained_wide.as_ptr());
+            let end = retained.encode_utf16().count();
+            SendMessageW(hwnd, 0x00b1, end, end as LPARAM);
+        }
+        SendMessageW(hwnd, 0x00b7, 0, 0); // EM_SCROLLCARET
     }
+}
+
+fn transcript_suffix(text: &str, max_utf16_units: usize) -> &str {
+    let mut units = 0;
+    let mut start = text.len();
+    for (index, character) in text.char_indices().rev() {
+        let width = character.len_utf16();
+        if units + width > max_utf16_units {
+            break;
+        }
+        units += width;
+        start = index;
+    }
+    &text[start..]
 }
 
 fn open_glossary_editor(state: &mut AppState) {
@@ -1269,4 +1294,21 @@ fn parse_hotkey(value: &str) -> Result<(u32, u32), String> {
         return Err("Configured hotkey must include Ctrl, Alt, or Shift".into());
     }
     Ok((modifiers, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transcript_suffix;
+
+    #[test]
+    fn transcript_trim_keeps_utf16_surrogate_pairs_intact() {
+        assert_eq!(transcript_suffix("abc🧡def", 5), "🧡def");
+        assert_eq!(transcript_suffix("abc🧡def", 6), "c🧡def");
+    }
+
+    #[test]
+    fn transcript_trim_bounds_large_text_without_splitting_utf8() {
+        assert_eq!(transcript_suffix("first\r\nlast", 4), "last");
+        assert_eq!(transcript_suffix("short", 100), "short");
+    }
 }
