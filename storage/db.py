@@ -657,6 +657,17 @@ class Database:
             )
         return token
 
+    def pending_file_deletes(self) -> list[sqlite3.Row]:
+        """Return live, exact-target delete confirmations for the desktop approval UI."""
+        now = datetime.now(timezone.utc).timestamp()
+        with self.connect() as connection:
+            return connection.execute(
+                """SELECT token,path,file_size,file_mtime_ns,expires_at
+                   FROM file_delete_audit WHERE status='pending' AND expires_at>?
+                   ORDER BY created_at DESC LIMIT 20""",
+                (now,),
+            ).fetchall()
+
     def claim_file_delete(self, token: str) -> sqlite3.Row | None:
         """Claim one pending token exactly once; expired requests cannot run."""
         normalized = token.strip().upper()

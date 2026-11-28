@@ -155,7 +155,8 @@ still being validated.
   phrase set improves coverage but does not imply understanding every possible
   wording; unmatched phrases remain conversational requests.
 - CMD is reachable from the chat prompt with `cmd: <command>`; “open cmd prompt”
-  displays the syntax, and common bare commands such as `dir` are routed directly.
+  displays the syntax, a visible **CMD** button inserts the command prefix, and
+  common bare commands such as `dir` are routed directly.
   Those requests bypass model latency but only stage an auditable, visible
   approval card. Unknown single commands are approval-gated; chained commands,
   shell expansion, destructive terminal deletion, installers, and privileged or
@@ -165,6 +166,13 @@ still being validated.
   words and do not rewrite dotted filenames. The desktop entry point now creates
   and wires the always-on-top robot avatar; the drawing class alone was not
   enough to make it visible in the running app.
+- Delete requests now have a visible exact-path confirmation card with separate
+  Recycle Bin and Cancel actions. File summaries may parse bounded text directly
+  from one exact configured-root file before indexing catches up; missing,
+  ambiguous, unsupported, and over-limit files must return a clear error rather
+  than sending that error text to the model as source content. Interactive native
+  CMD, broad multi-command scripts, and high-risk shell operations remain outside
+  this approval-gated chat flow.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

@@ -320,7 +320,68 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(card.windowType(), Qt.WindowType.Window)
         self.assertFalse(bool(card.windowFlags() & Qt.WindowType.FramelessWindowHint))
         self.assertGreaterEqual(card.minimumWidth(), 520)
+        self.assertEqual(card.cmd_button.text(), "CMD")
+        QTest.mouseClick(card.cmd_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(card.input.text(), "cmd: ")
         card.close()
+
+    def test_delete_confirmation_is_visible_and_cancel_button_keeps_file(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            base = Path(directory)
+            root = base / "allowed"
+            root.mkdir()
+            target = root / "keep.txt"
+            target.write_text("safe", encoding="utf-8")
+            db = Database(base / "state.sqlite3")
+            db.initialize()
+            token = db.stage_file_delete(
+                target, file_size=target.stat().st_size, file_mtime_ns=target.stat().st_mtime_ns,
+            )
+            card = PopoverCard(engine=None, runtime=None, db=db)
+            labels = [label.text() for label in card.findChildren(QLabel)]
+            self.assertTrue(any(str(target) in label and "Recycle Bin" in label for label in labels))
+            cancel = next(button for button in card.findChildren(QPushButton) if button.text() == "Cancel delete")
+            QTest.mouseClick(cancel, Qt.MouseButton.LeftButton)
+            self.assertTrue(target.exists())
+            self.assertEqual(db.pending_file_deletes(), [])
+            self.assertEqual(db.cancel_file_delete(token), False)
+            card.close()
+
+    def test_delete_confirm_button_submits_the_exact_visible_token(self) -> None:
+        class Runtime:
+            settings = {}
+
+            def __init__(self) -> None:
+                self.prompt = None
+
+            def ask_streaming(self, prompt, _on_delta):
+                self.prompt = prompt
+                return "Moved this file to the Windows Recycle Bin."
+
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / "tests") as directory:
+            base = Path(directory)
+            target = base / "confirm-me.txt"
+            target.write_text("safe until click", encoding="utf-8")
+            db = Database(base / "state.sqlite3")
+            db.initialize()
+            token = db.stage_file_delete(
+                target, file_size=target.stat().st_size, file_mtime_ns=target.stat().st_mtime_ns,
+            )
+            runtime = Runtime()
+            card = PopoverCard(engine=None, runtime=runtime, db=db)
+            confirm = next(
+                button for button in card.findChildren(QPushButton)
+                if button.text() == "Move to Recycle Bin"
+            )
+            QTest.mouseClick(confirm, Qt.MouseButton.LeftButton)
+            deadline = time.monotonic() + 2
+            while card._task is not None and card._task.isRunning() and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.app.processEvents()
+            self.assertEqual(runtime.prompt, f"CONFIRM DELETE {token}")
+            self.assertTrue(target.exists())  # the fake runtime did not perform a delete
+            card.close()
 
     def test_chat_wait_feedback_reports_elapsed_time(self) -> None:
         class FakeDatabase:

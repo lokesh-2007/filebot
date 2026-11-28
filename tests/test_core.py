@@ -788,6 +788,24 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("Milestone one is complete.", seen_prompts[0])
         self.assertIn("untrusted reference data", seen_prompts[0])
 
+        fresh_folder = self.root / "Incoming" / "Drafts"
+        fresh_folder.mkdir(parents=True)
+        fresh_file = fresh_folder / "not-indexed-yet.txt"
+        fresh_file.write_text("The release date is Friday.", encoding="utf-8")
+        seen_prompts.clear()
+        with patch.object(
+            runtime, "_run_agent", side_effect=lambda _intent, coro: run_immediate(coro),
+        ):
+            fresh_summary = runtime.ask_streaming(
+                "Summarize not-indexed-yet.txt", lambda _delta: None,
+            )
+        self.assertEqual(fresh_summary, "The milestone is complete.")
+        self.assertIn("The release date is Friday.", seen_prompts[0])
+
+        with patch.object(runtime, "_run_agent", side_effect=AssertionError("must not summarize an error")):
+            missing_summary = runtime.ask_streaming("Summarize missing-summary.txt", lambda _delta: None)
+        self.assertIn("I couldn't read", missing_summary)
+
     def test_explicit_folder_listing_stays_inside_configured_roots_and_skips_model(self) -> None:
         (self.root / "Reports").mkdir()
         (self.root / "Reports" / "summary.txt").write_text("summary", encoding="utf-8")

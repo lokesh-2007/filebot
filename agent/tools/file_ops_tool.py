@@ -267,6 +267,43 @@ class FileOpsTool:
         suffix = "\n\n[Excerpt shortened to fit FileBot's local read limit.]" if remaining <= 0 else ""
         return f"File: {file}\n{content}{suffix}"
 
+    def read_file_for_summary(
+        self, path: str, *, max_chars: int = 6_000, max_file_bytes: int = 50 * 1024 * 1024,
+        max_docx_uncompressed_bytes: int = 100 * 1024 * 1024,
+    ) -> str:
+        """Parse a bounded exact file for summarization, even before indexing completes."""
+        if not 1 <= max_chars <= 12_000 or max_file_bytes < 1:
+            raise ValueError("Invalid summary file limits")
+        file = Path(path).expanduser().resolve(strict=True)
+        if not file.is_file():
+            raise ValueError("Only existing files can be summarized")
+        if self.roots is None or not path_is_within_roots(file, self.roots):
+            raise PermissionError("File is outside FileBot's configured roots")
+        if file.stat().st_size > max_file_bytes:
+            raise ValueError(f"File exceeds FileBot's {max_file_bytes:,}-byte summary limit")
+        from retrieval.parsers import parse_file
+        chunks = parse_file(
+            file, max_chars=max_chars,
+            max_docx_uncompressed_bytes=max_docx_uncompressed_bytes,
+        )
+        remaining = max_chars
+        sections: list[str] = []
+        for chunk in chunks:
+            text = str(chunk.text or "")
+            if not text:
+                continue
+            source = str(chunk.heading or chunk.page_or_line or "").strip()
+            prefix = f"[{source}]\n" if source else ""
+            sections.append(prefix + text[:remaining])
+            remaining -= len(text)
+            if remaining <= 0:
+                break
+        content = "\n\n".join(sections).strip()
+        if not content:
+            raise ValueError("FileBot could not extract readable text from this file")
+        suffix = "\n\n[Excerpt shortened to fit FileBot's local summary limit.]" if remaining <= 0 else ""
+        return f"File: {file}\n{content}{suffix}"
+
     def list_directory(self, path: str | None = None, *, limit: int = 100) -> str:
         """List one configured folder without following links outside its roots."""
         if self.roots is None or not self.roots:

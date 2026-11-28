@@ -70,6 +70,24 @@ class FileOpsTests(unittest.TestCase):
                 )
             self.assertTrue(changed.exists())
 
+    def test_summary_can_read_bounded_unindexed_file_inside_roots(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            base = Path(directory)
+            root, outside = base / "allowed", base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            file = root / "fresh.txt"
+            file.write_text("A fresh document with release notes.", encoding="utf-8")
+            private_file = outside / "private.txt"
+            private_file.write_text("not in roots", encoding="utf-8")
+            tool = FileOpsTool(db=Database(base / "unused.sqlite3"), roots=[str(root)])
+
+            excerpt = tool.read_file_for_summary(str(file), max_chars=200)
+            self.assertIn(str(file.resolve()), excerpt)
+            self.assertIn("release notes", excerpt)
+            with self.assertRaisesRegex(PermissionError, "outside FileBot"):
+                tool.read_file_for_summary(str(private_file))
+
     def test_lists_only_configured_folders_and_bounds_the_result(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
             base = Path(directory)

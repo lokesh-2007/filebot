@@ -669,6 +669,7 @@ class BotRuntime:
         if target is None:
             return None
         candidate = Path(target).expanduser()
+        file_ops = FileOpsTool(self.db, roots=self.settings.get("index", {}).get("roots"))
         if candidate.is_absolute():
             row = self.db.get_file(candidate)
             matches = [row] if row is not None else []
@@ -690,20 +691,18 @@ class BotRuntime:
                 "path": str(row["path"]),
                 "snippet": str(row["snippet"] or "Matching indexed file"),
             } for row in matches[:20]]
-        from agent.tools.file_ops_tool import FileOpsTool
-        roots = self.settings.get("index", {}).get("roots")
-        file_ops = FileOpsTool(self.db, roots=roots)
         file_ops.open_file(str(matches[0]["path"]))
         return f"Opened {matches[0]['path']}"
 
     def _read_explicit_target(
-        self, prompt: str, *, max_chars: int = 12_000,
+        self, prompt: str, *, max_chars: int = 12_000, allow_unindexed_summary: bool = False,
     ) -> str | list[dict[str, Any]] | None:
         """Read an explicitly named indexed file without guessing ambiguous paths."""
         target = self.router.open_target(prompt)
         if target is None:
             return None
         candidate = Path(target).expanduser()
+        file_ops = FileOpsTool(self.db, roots=self.settings.get("index", {}).get("roots"))
         if candidate.is_absolute():
             row = self.db.get_file(candidate)
             matches = [row] if row is not None and row["status"] == "indexed" else []
@@ -721,14 +720,78 @@ class BotRuntime:
             # find_indexed_by_name already filters to indexed records.
             matches = self.db.find_indexed_by_name(target)
         if not matches:
+            if allow_unindexed_summary:
+                candidates: dict[str, Path] = {}
+                for root in file_ops.roots or []:
+                    try:
+                        if candidate.is_absolute():
+                            possible = candidate.resolve(strict=True)
+                        else:
+                            relative = candidate
+                            if relative.parts and relative.parts[0].casefold() == root.name.casefold():
+                                relative = Path(*relative.parts[1:])
+                            possible = (root / relative).resolve(strict=True)
+                        if (possible.is_file() and file_ops.roots
+                                and path_is_within_roots(possible, file_ops.roots)):
+                            candidates[str(possible).casefold()] = possible
+                    except (OSError, RuntimeError):
+                        continue
+                if not candidates and not candidate.is_absolute() and len(candidate.parts) == 1:
+                    # A file may exist in a configured child folder before the
+                    # background indexer has discovered it. Search metadata only,
+                    # with strict depth/entry caps and no symlink traversal.
+                    skipped = {".git", ".venv", "appdata", "node_modules", "windows"}
+                    visited = 0
+                    for root in file_ops.roots or []:
+                        try:
+                            root_path = root.resolve(strict=True)
+                        except (OSError, RuntimeError):
+                            continue
+                        queue: list[tuple[Path, int]] = [(root_path, 0)]
+                        position = 0
+                        while position < len(queue) and visited < 2_000:
+                            folder, depth = queue[position]
+                            position += 1
+                            visited += 1
+                            try:
+                                with os.scandir(folder) as entries:
+                                    for entry in entries:
+                                        try:
+                                            if (entry.is_file(follow_symlinks=False)
+                                                    and entry.name.casefold() == candidate.name.casefold()):
+                                                path = Path(entry.path).resolve(strict=True)
+                                                if path_is_within_roots(path, file_ops.roots or []):
+                                                    candidates[str(path).casefold()] = path
+                                            elif (depth < 4 and entry.name.casefold() not in skipped
+                                                  and entry.is_dir(follow_symlinks=False)):
+                                                child = Path(entry.path).resolve(strict=True)
+                                                if path_is_within_roots(child, file_ops.roots or []):
+                                                    queue.append((child, depth + 1))
+                                        except (OSError, RuntimeError):
+                                            continue
+                            except OSError:
+                                continue
+                if len(candidates) == 1:
+                    index_config = self.settings.get("index", {})
+                    return file_ops.read_file_for_summary(
+                        str(next(iter(candidates.values()))),
+                        max_chars=max_chars,
+                        max_file_bytes=int(index_config.get("max_file_bytes", 50 * 1024 * 1024)),
+                        max_docx_uncompressed_bytes=int(
+                            index_config.get("max_docx_uncompressed_bytes", 100 * 1024 * 1024)
+                        ),
+                    )
+                if len(candidates) > 1:
+                    options = "\n".join(
+                        f"- {path}" for path in sorted(candidates.values(), key=lambda p: str(p).casefold())[:10]
+                    )
+                    return f"More than one configured file matches '{Path(target).name}'; give its exact path:\n{options}"
             return f"I couldn't read '{Path(target).name}' because it isn't in FileBot's current index."
         if len(matches) > 1:
             return [{
                 "path": str(row["path"]),
                 "snippet": str(row["snippet"] or "Matching indexed file"),
             } for row in matches[:20]]
-        roots = self.settings.get("index", {}).get("roots")
-        file_ops = FileOpsTool(self.db, roots=roots)
         return file_ops.read_file(str(matches[0]["path"]), max_chars=max_chars)
 
     def _list_explicit_folder(self, prompt: str) -> str:
@@ -954,10 +1017,13 @@ class BotRuntime:
         if intent == "read":
             result = self._read_explicit_target(
                 prompt, max_chars=6_000 if self.router.is_summary_request(prompt) else 12_000,
+                allow_unindexed_summary=self.router.is_summary_request(prompt),
             )
             if self.router.is_summary_request(prompt):
                 if isinstance(result, list):
                     return result
+                if result is None or result.startswith("I couldn't read ") or result.startswith("More than one configured file"):
+                    return result or "I couldn't identify which configured file to summarize."
                 summary_content = result
             elif result is not None:
                 return result
@@ -1014,10 +1080,13 @@ class BotRuntime:
         if intent == "read":
             result = self._read_explicit_target(
                 prompt, max_chars=6_000 if self.router.is_summary_request(prompt) else 12_000,
+                allow_unindexed_summary=self.router.is_summary_request(prompt),
             )
             if self.router.is_summary_request(prompt):
                 if isinstance(result, list):
                     return result
+                if result is None or result.startswith("I couldn't read ") or result.startswith("More than one configured file"):
+                    return result or "I couldn't identify which configured file to summarize."
                 summary_content = result
             elif result is not None:
                 return result

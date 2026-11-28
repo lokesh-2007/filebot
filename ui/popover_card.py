@@ -143,6 +143,10 @@ class PopoverCard(QWidget):
         self.input.textEdited.connect(lambda _text: self.activity.emit())
         layout.addWidget(self.input)
         row = QHBoxLayout()
+        self.cmd_button = QPushButton("CMD")
+        self.cmd_button.setAccessibleName("Enter a CMD command for approval")
+        self.cmd_button.setToolTip("Enter one CMD command in chat; FileBot will ask you to approve it before running")
+        self.cmd_button.clicked.connect(self._insert_cmd_prefix)
         self.send_button = QPushButton("Send")
         self.send_button.setDefault(True)
         self.send_button.clicked.connect(self.submit)
@@ -151,6 +155,7 @@ class PopoverCard(QWidget):
         self.stop_button.setEnabled(False)
         self.stop_button.setVisible(False)
         self.stop_button.clicked.connect(self.cancel_request)
+        row.addWidget(self.cmd_button)
         row.addWidget(self.send_button, 1)
         row.addWidget(self.stop_button)
         layout.addLayout(row)
@@ -259,6 +264,7 @@ class PopoverCard(QWidget):
         """Show immediate wake feedback and gate requests until retrieval is ready."""
         self.input.setEnabled(not loading)
         self.send_button.setEnabled(not loading)
+        self.cmd_button.setEnabled(not loading)
         self.stop_button.setEnabled(False)
         if loading:
             message = "Loading the local search index… You can send any file or chat request as soon as FileBot is ready."
@@ -291,6 +297,7 @@ class PopoverCard(QWidget):
         self.activity.emit()
         self.input.setEnabled(False)
         self.send_button.setEnabled(False)
+        self.cmd_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.stop_button.setVisible(True)
         self.status_changed.emit("active")
@@ -402,6 +409,7 @@ class PopoverCard(QWidget):
         self.stop_button.setVisible(False)
         self.input.setEnabled(True)
         self.send_button.setEnabled(True)
+        self.cmd_button.setEnabled(True)
         if error:
             if self._current_chat_prompt is not None:
                 self._remember_chat_turn(self._current_chat_prompt, error, persist=False)
@@ -410,6 +418,7 @@ class PopoverCard(QWidget):
                 self._render_chat_transcript()
             else:
                 self.answer.setPlainText(error)
+            self._refresh_pending()
             self.work_finished.emit()
             return
         if isinstance(result, list):
@@ -531,10 +540,73 @@ class PopoverCard(QWidget):
             buttons.addWidget(reject)
             box.addLayout(buttons)
             self.pending.addWidget(card)
-        if rows:
+        list_deletes = getattr(self.db, "pending_file_deletes", None)
+        delete_rows = list_deletes() if callable(list_deletes) else []
+        for row in delete_rows:
+            card = QFrame()
+            box = QVBoxLayout(card)
+            details = QLabel(
+                "Confirm moving this exact file to the Windows Recycle Bin?\n"
+                f"File: {row['path']}\nThis confirmation expires automatically."
+            )
+            details.setTextFormat(Qt.TextFormat.PlainText)
+            details.setWordWrap(True)
+            box.addWidget(details)
+            buttons = QHBoxLayout()
+            confirm = QPushButton("Move to Recycle Bin")
+            cancel = QPushButton("Cancel delete")
+            token = str(row["token"])
+            path = str(row["path"])
+            confirm.clicked.connect(
+                lambda _checked=False, key=token, exact_path=path:
+                    self._confirm_pending_delete(key, exact_path)
+            )
+            cancel.clicked.connect(lambda _checked=False, key=token: self._cancel_pending_delete(key))
+            buttons.addWidget(confirm)
+            buttons.addWidget(cancel)
+            box.addLayout(buttons)
+            self.pending.addWidget(card)
+        if rows or delete_rows:
             self.status_changed.emit("cmd_pending")
         else:
             self.status_changed.emit("active")
+
+    def _insert_cmd_prefix(self) -> None:
+        """Make command access visible while retaining the normal review flow."""
+        current = self.input.text().strip()
+        if not current.casefold().startswith(("cmd:", "cmd ", "cmd.exe", "command:", "terminal:")):
+            self.input.setText(f"cmd: {current}" if current else "cmd: ")
+        self.input.setFocus()
+        self.input.setCursorPosition(len(self.input.text()))
+
+    def _confirm_pending_delete(self, token: str, path: str) -> None:
+        """Require a visible click before moving the displayed exact file to Recycle Bin."""
+        if self._task is not None and self._task.isRunning():
+            return
+        self.activity.emit()
+        self.input.setEnabled(False)
+        self.send_button.setEnabled(False)
+        self.cmd_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.status_changed.emit("active")
+        self._current_chat_prompt = f"Confirm moving to Recycle Bin: {path}"
+        self._current_stream_text = ""
+        self._render_chat_transcript("Moving the confirmed file…")
+        self.work_started.emit()
+        self._task = _Task(self.runtime, f"CONFIRM DELETE {token}", False)
+        self._task.done.connect(self._received)
+        self._task.delta.connect(self._received_delta)
+        self._chat_has_deltas = False
+        self._request_timer.stop()
+        self._task.start()
+
+    def _cancel_pending_delete(self, token: str) -> None:
+        """Cancel a pending delete card without touching its file."""
+        if self.db.cancel_file_delete(token):
+            self.answer.setPlainText("Canceled. The file was not changed.")
+        else:
+            self.answer.setPlainText("This delete confirmation expired or was already handled.")
+        self._refresh_pending()
 
     def _decide(self, proposal_id: str, approved: bool) -> None:
         self.activity.emit()
