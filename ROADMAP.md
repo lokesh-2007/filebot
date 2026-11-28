@@ -176,28 +176,30 @@ still being validated.
   or 11435, and Windows rejected both HTTP probes with a socket-permissions
   error. This sandbox therefore cannot provide a new live cold/warm Ollama run,
   managed unload/reload validation, or full-stack RAM/GPU measurement.
-- Complete Rust feature parity, including local model start/recovery, hybrid
-  retrieval feedback/glossary behavior, accessible result opening, and Windows
-  UI verification. The core now starts/rechecks local Ollama on model use,
-  expands persisted glossary entries, ranks open/vote signals, and the native UI
-  can record votes. The native UI now opens a SQLite-backed glossary editor;
-  Windows visual and interaction verification remain open. Startup cancellation is now wired through the UI/lifecycle/runtime and
-  stops only a FileBot-owned server child during readiness polling. Readiness
-  HTTP probes are capped at two seconds, then cancellation is checked again;
-  Rust formatting, offline core/desktop checks, and Clippy pass. Cancellation
-  tests are present but could not be executed because the test binary cannot
-  link ONNX Runtime (`OrtGetApiBase` is unresolved in this environment). Keep
-  Python as the default until parity and measurements pass.
+- Complete Rust feature parity. Rust currently supports indexed search/open and
+  explicit CMD proposals. Bounded direct read/summarize, configured-folder
+  listing/opening, safe file creation, exact-target confirmed recoverable
+  deletion, the separate PowerShell proposal gate, accessible UI, and Windows
+  visual/interaction verification remain open. The core now starts/rechecks
+  local Ollama on model use, expands persisted glossary entries, ranks open/vote
+  signals, and the native UI can record votes and edit the SQLite glossary.
+  Startup cancellation is wired through the UI/lifecycle/runtime and stops only
+  a FileBot-owned server child during readiness polling. Readiness HTTP probes
+  are capped at two seconds, then cancellation is checked again;
+  Rust formatting, offline core/desktop checks, and Clippy pass. All 57 core
+  Rust tests and both desktop transcript tests now pass using a temporary
+  import library for the installed ONNX Runtime 1.32.0 DLL; this does not
+  validate live Ollama or native UI interaction. Keep Python as the default
+  until parity and measurements pass.
 - Rust chat streaming now appends deltas through the native edit control rather
   than rebuilding the whole transcript per delta, then trims from 30,000 to
   24,000 UTF-16 units while preserving complete Unicode characters. Pure trim
-  tests are compile-checked; native interaction and linked tests remain
-  unverified because ONNX Runtime cannot be linked in this environment.
+  tests pass; native interaction remains unverified.
 - In this Windows session, Rust formatting, offline core/desktop `cargo check`,
-  and both Clippy targets pass with `ORT_SKIP_DOWNLOAD=1`. Core tests compile
-  through the test crate but cannot link because the ONNX Runtime library is
-  unavailable (`OrtGetApiBase` unresolved); native Rust runtime behavior and
-  Windows UI flows therefore remain unverified here.
+  both Clippy targets, and Rust tests pass. The tests used the existing Python
+  environment's ONNX Runtime DLL with a temporary import library and no
+  downloads. Live Ollama behavior, model RAM/latency, and interactive native UI
+  flows remain unverified.
 - Package and validate a clean Windows install, including persistent settings,
   model setup, upgrades, and a signed installer before a general release.
 

@@ -16,6 +16,10 @@
   unavailable dependency instead of relying on the host's installed packages.
 - Record current loopback restrictions and the passing OneDrive folder-open
   acceptance case without overstating live model or RAM validation.
+- Run all 57 Rust core tests and both native transcript tests by linking against
+  the existing local ONNX Runtime DLL through a temporary import library.
+- Spell out remaining Rust file-operation and PowerShell parity gates to keep
+  the Python support boundary explicit.
 - Improve SQLite fallback retrieval for exact filenames and filename-only
   queries by matching query terms in file names and ranking stronger name hits
   ahead of body-only matches. Record the measured 10k/100k latency tradeoff.

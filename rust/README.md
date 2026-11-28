@@ -65,6 +65,17 @@ application passes the Windows UI and performance gates below.
   displays lifecycle state and process working-set RAM. Its UI uses no browser
   or Qt runtime.
 
+## Remaining Python parity
+
+Python remains the supported desktop application while Rust is an experimental
+preview. The current Rust assistant supports indexed search/open and explicit
+CMD proposals. It still needs bounded direct file reading and summarization,
+configured-folder listing/opening, safe new-file creation, exact-target
+confirmed Recycle Bin deletion with recovery, and the separately approved
+PowerShell proposal flow. Native keyboard/accessibility and visual UI
+acceptance, live Ollama recovery, and clean install/upgrade checks also remain
+release gates. Keep the CMD approval gate explicit throughout this work.
+
 Build and run the Rust core tests from the repository root with Rust 1.92 or newer:
 
 ```powershell
