@@ -19,6 +19,7 @@ use thiserror::Error;
 
 const MAX_PROMPT_CHARS: usize = 16_000;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MODEL_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TOOL_ROUNDS: usize = 5;
 const MAX_TOOL_CALLS: usize = 5;
 const HISTORY_TURNS: usize = 12;
@@ -58,6 +59,16 @@ pub struct TurnMetrics {
 /// Transport abstraction keeps chat-turn policy testable without a live model.
 pub trait OllamaTransport {
     fn check_model(&mut self, model: &str) -> Result<(), AgentError>;
+    fn check_model_cancellable(
+        &mut self,
+        model: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<(), AgentError> {
+        if is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
+        self.check_model(model)
+    }
     fn chat(&mut self, request: &Value) -> Result<Value, AgentError>;
     /// Stream user-visible plain-chat text; transports may provide a buffered fallback.
     fn chat_stream(
@@ -187,14 +198,42 @@ impl LocalOllamaClient {
 
 impl OllamaTransport for LocalOllamaClient {
     fn check_model(&mut self, model: &str) -> Result<(), AgentError> {
+        self.check_model_cancellable(model, &mut || false)
+    }
+
+    fn check_model_cancellable(
+        &mut self,
+        model: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<(), AgentError> {
+        if is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
         let endpoint = self.endpoint("api/tags")?;
-        let payload = match self.client.get(endpoint.clone()).send() {
+        let payload = match self
+            .client
+            .get(endpoint.clone())
+            .timeout(MODEL_PREFLIGHT_TIMEOUT)
+            .send()
+        {
             Ok(response) => Self::checked_json(response)?,
             Err(_first_error) if self.auto_start => {
+                if is_cancelled() {
+                    return Err(AgentError::Cancelled);
+                }
                 self.start_server()?;
                 let deadline = Instant::now() + self.startup_timeout;
                 let mut last_error;
                 loop {
+                    if is_cancelled() {
+                        if let Some(mut process) = self.process.take()
+                            && process.try_wait()?.is_none()
+                        {
+                            let _ = process.kill();
+                            let _ = process.wait();
+                        }
+                        return Err(AgentError::Cancelled);
+                    }
                     if let Some(process) = self.process.as_mut()
                         && let Some(status) = process.try_wait()?
                     {
@@ -203,7 +242,12 @@ impl OllamaTransport for LocalOllamaClient {
                             "Ollama exited while FileBot waited for its local server (status {status}). Open Ollama and try again."
                         )));
                     }
-                    match self.client.get(endpoint.clone()).send() {
+                    match self
+                        .client
+                        .get(endpoint.clone())
+                        .timeout(MODEL_PREFLIGHT_TIMEOUT)
+                        .send()
+                    {
                         Ok(response) => break Self::checked_json(response)?,
                         Err(error) => {
                             last_error = error.to_string();
@@ -213,7 +257,18 @@ impl OllamaTransport for LocalOllamaClient {
                                     self.startup_timeout.as_secs()
                                 )));
                             }
-                            thread::sleep(Duration::from_millis(250));
+                            if let Err(error) =
+                                cancellable_pause(Duration::from_millis(250), is_cancelled)
+                            {
+                                if matches!(error, AgentError::Cancelled)
+                                    && let Some(mut process) = self.process.take()
+                                    && process.try_wait()?.is_none()
+                                {
+                                    let _ = process.kill();
+                                    let _ = process.wait();
+                                }
+                                return Err(error);
+                            }
                         }
                     }
                 }
@@ -325,6 +380,26 @@ impl OllamaTransport for LocalOllamaClient {
             .json(&request)
             .send()?;
         let _ = Self::checked_json(response)?;
+        Ok(())
+    }
+}
+
+fn cancellable_pause(
+    duration: Duration,
+    is_cancelled: &mut dyn FnMut() -> bool,
+) -> Result<(), AgentError> {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
+        thread::sleep(
+            Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+    if is_cancelled() {
+        Err(AgentError::Cancelled)
+    } else {
         Ok(())
     }
 }
@@ -599,7 +674,17 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
     pub fn ask_streaming_profiled(
         &mut self,
         prompt: &str,
+        on_delta: impl FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        self.ask_streaming_profiled_cancellable(prompt, on_delta, || false)
+    }
+
+    /// Run a turn with a cancellation check that also covers Ollama preflight/startup.
+    pub fn ask_streaming_profiled_cancellable(
+        &mut self,
+        prompt: &str,
         mut on_delta: impl FnMut(&str) -> bool,
+        mut is_cancelled: impl FnMut() -> bool,
     ) -> Result<(String, TurnMetrics), AgentError> {
         let turn_started = Instant::now();
         let prompt = prompt.trim();
@@ -610,7 +695,8 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
             .into());
         }
         let preflight_started = Instant::now();
-        self.transport.check_model(&self.model)?;
+        self.transport
+            .check_model_cancellable(&self.model, &mut is_cancelled)?;
         let model_preflight = preflight_started.elapsed();
         let mut time_to_first_token = None;
         let intent = self.router.route(prompt);
@@ -623,6 +709,9 @@ impl<T: OllamaTransport, A: AgentTools> BotRuntime<T, A> {
         let mut total_tool_calls: usize = 0;
 
         for _ in 0..MAX_TOOL_ROUNDS {
+            if is_cancelled() {
+                return Err(AgentError::Cancelled);
+            }
             let should_stream = intent == Intent::Chat;
             let request = json!({"model":self.model,"messages":messages,"tools":schemas,"stream":should_stream,"keep_alive":self.keep_alive,"options":{"num_ctx":self.num_ctx,"num_predict":self.num_predict}});
             // Ollama may load a model before a request times out or fails decoding.
@@ -941,6 +1030,29 @@ mod tests {
         assert_eq!(client.startup_timeout, Duration::from_secs(45));
         assert!(LocalOllamaClient::with_startup("http://127.0.0.1:11434", true, 0).is_err());
         assert!(LocalOllamaClient::with_startup("http://127.0.0.1:11434", true, 121).is_err());
+    }
+
+    #[test]
+    fn cancellable_startup_pause_observes_stop_without_waiting_for_full_poll() {
+        let mut checks = 0;
+        let started = Instant::now();
+        let result = cancellable_pause(Duration::from_secs(2), &mut || {
+            checks += 1;
+            checks >= 3
+        });
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_millis(250));
+    }
+
+    #[test]
+    fn cancelled_preflight_does_not_send_a_chat_request() {
+        let transport = MockTransport::default();
+        let requests = Arc::clone(&transport.requests);
+        let mut runtime = BotRuntime::new(&settings(), transport, MockTools::default()).unwrap();
+        let result =
+            runtime.ask_streaming_profiled_cancellable("Explain local indexing", |_| true, || true);
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[test]

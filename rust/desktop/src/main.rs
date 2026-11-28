@@ -331,7 +331,7 @@ unsafe extern "system" fn window_proc(
                     state.cancel.store(true, Ordering::Release);
                     set_output(
                         state,
-                        "Cancellation requested. The active response will stop at the next stream boundary.",
+                        "Cancellation requested. FileBot will stop model startup or the active response.",
                     );
                 }
                 ID_APPROVE => approve(state, true),
@@ -581,9 +581,9 @@ fn ask(state: &mut AppState) {
     let cancel = Arc::clone(&state.cancel);
     thread::spawn(move || {
         let result = lifecycle
-            .ask_streaming_profiled(&prompt, |part| {
+            .ask_streaming_profiled_cancellable(&prompt, |part| {
                 !cancel.load(Ordering::Acquire) && tx.send(UiEvent::Delta(part.to_owned())).is_ok()
-            })
+            }, || cancel.load(Ordering::Acquire))
             .map(|(_answer, metrics)| metrics)
             .map_err(|error| error.to_string());
         let _ = tx.send(UiEvent::Finished(result));

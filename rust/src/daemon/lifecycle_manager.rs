@@ -30,6 +30,17 @@ pub trait ManagedAssistant: Send + 'static {
         prompt: &str,
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> Result<(String, TurnMetrics), AgentError>;
+    fn ask_streaming_profiled_cancellable(
+        &mut self,
+        prompt: &str,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        if is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
+        self.ask_streaming_profiled(prompt, on_delta)
+    }
     fn sleep(&mut self);
 }
 
@@ -52,6 +63,15 @@ where
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> Result<(String, TurnMetrics), AgentError> {
         BotRuntime::ask_streaming_profiled(self, prompt, on_delta)
+    }
+
+    fn ask_streaming_profiled_cancellable(
+        &mut self,
+        prompt: &str,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        BotRuntime::ask_streaming_profiled_cancellable(self, prompt, on_delta, is_cancelled)
     }
 
     fn sleep(&mut self) {
@@ -151,7 +171,17 @@ impl<A: ManagedAssistant> LifecycleManager<A> {
     pub fn ask_streaming_profiled(
         &self,
         prompt: &str,
+        on_delta: impl FnMut(&str) -> bool,
+    ) -> Result<(String, TurnMetrics), AgentError> {
+        self.ask_streaming_profiled_cancellable(prompt, on_delta, || false)
+    }
+
+    /// Run with a cancellation probe checked during model preflight/startup and turn boundaries.
+    pub fn ask_streaming_profiled_cancellable(
+        &self,
+        prompt: &str,
         mut on_delta: impl FnMut(&str) -> bool,
+        mut is_cancelled: impl FnMut() -> bool,
     ) -> Result<(String, TurnMetrics), AgentError> {
         self.wake();
         let result = {
@@ -159,7 +189,7 @@ impl<A: ManagedAssistant> LifecycleManager<A> {
                 .assistant
                 .lock()
                 .map_err(|_| AgentError::Response("assistant lock was poisoned".into()))?;
-            assistant.ask_streaming_profiled(prompt, &mut on_delta)
+            assistant.ask_streaming_profiled_cancellable(prompt, &mut on_delta, &mut is_cancelled)
         };
         self.wake();
         result
