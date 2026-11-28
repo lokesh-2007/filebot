@@ -529,18 +529,27 @@ class Database:
             ))
 
     def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
-        """Fallback lexical search using SQLite LIKE when BM25 is not active."""
-        terms = [f"%{term}%" for term in query.split() if term]
+        """Fallback lexical search, ranking filename hits ahead of body-only hits."""
+        normalized = query.strip()
+        terms = [f"%{term}%" for term in normalized.split() if term]
         if not terms:
             return []
         clause = " OR ".join("c.snippet LIKE ?" for _ in terms)
+        filename_clause = " OR ".join("f.file_name LIKE ?" for _ in terms)
+        name_match_count = " + ".join(
+            "CASE WHEN f.file_name LIKE ? THEN 1 ELSE 0 END" for _ in terms
+        )
         with self.connect() as connection:
             return list(connection.execute(f"""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
                 COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
                 COALESCE(s.downvotes,0) AS downvotes
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
-                WHERE f.status='indexed' AND (({clause}) OR f.file_name LIKE ?)
-                LIMIT ?""", (*terms, f"%{query}%", limit)))
+                WHERE f.status='indexed' AND (({clause}) OR ({filename_clause}) OR f.file_name LIKE ?)
+                ORDER BY (f.file_name = ? COLLATE NOCASE) DESC,
+                         ({name_match_count}) DESC,
+                         length(f.file_name) ASC,
+                         f.mtime DESC, f.path COLLATE NOCASE
+                LIMIT ?""", (*terms, *terms, f"%{normalized}%", normalized, *terms, limit)))
 
     def stage_command(
         self, command: str, cwd: str, reason: str, risk: str, status: str = "pending",

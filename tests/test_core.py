@@ -148,6 +148,24 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.db.all_chunks(limit=1)[0]["file_name"], "agenda.txt")
         self.assertEqual([row["file_name"] for row in self.db.search_lexical("agenda")], ["agenda.txt"])
 
+    def test_lexical_fallback_ranks_exact_and_filename_matches_first(self) -> None:
+        for name, content in (
+            ("budget-plan.md", "Unrelated project notes and background."),
+            ("background.txt", "This mentions a budget plan in the body."),
+            ("other-budget.txt", "A second budget plan document."),
+        ):
+            self.db.replace_file(
+                self.root / name, content_hash=name, size=len(content), mtime=1.0,
+                chunks=[{"text": content}],
+            )
+
+        exact_results = self.db.search_lexical("budget-plan.md")
+        results = self.db.search_lexical("budget plan")
+
+        self.assertEqual(exact_results[0]["file_name"], "budget-plan.md")
+        self.assertEqual(results[0]["file_name"], "budget-plan.md")
+        self.assertIn("background.txt", {row["file_name"] for row in results})
+
     def test_open_and_feedback_signals_are_persisted(self) -> None:
         path = self.root / "feedback.md"
         self.db.replace_file(

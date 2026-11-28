@@ -38,14 +38,15 @@ still being validated.
   Shared pages may be counted twice. This is a conservative post-turn response,
   not an enforced cap; Windows threshold behavior and recovery latency need
   validation on supported hardware.
-- The SQLite `LIKE` lexical fallback was measured on this Windows session using
-  a temporary synthetic database and 21 searches per size: 10,000 chunks took
-  34.88 ms p50 / 50.07 ms p95; 100,000 chunks took 237.74 ms p50 / 281.15 ms
-  p95 and returned the single matching row. This suggests the fallback remains
-  usable as a degraded path at 100k chunks, but it is a synthetic in-memory
-  fixture, not a disk-heavy personal-corpus benchmark or a defined latency SLA.
-  No persistent FTS index has been added; larger or slower real corpora still
-  need measurement.
+- The SQLite `LIKE` lexical fallback now matches filename terms individually
+  and ranks exact filenames and stronger filename matches ahead of body-only
+  hits. After this change it measured 38.85 ms p50 / 52.35 ms p95 at 10,000
+  synthetic chunks and 334.33 ms p50 / 374.93 ms p95 at 100,000 chunks (21
+  searches per size, one matching row). Filename prioritization adds work to
+  the bounded fallback; 100k p95 rose from the prior 281.15 ms baseline. This
+  remains a synthetic in-memory fixture, not a disk-heavy personal-corpus
+  benchmark or a defined latency SLA. No persistent FTS index has been added;
+  larger or slower real corpora still need measurement.
 - Ollama integration was retried on the local Windows host. The standard
   `11434` port is not visible in the current listener list, but Ollama itself
   reports it cannot bind because the address is already in use. Starting the
@@ -146,6 +147,12 @@ still being validated.
   `socket.accept` → `asyncio.proactor_events._make_self_pipe`, consistent with
   the session's denied socket operations; an isolated UI/model integration run
   on the supported Windows test environment is still required.
+- After filename fallback ranking was added, 45 `test_core.py` tests passed
+  with 21 asyncio/model cases deselected, and 85 tests across benchmark, chat,
+  config, retrieval, file operations, Ollama tool bridge, startup, watcher, and
+  Qt lifecycle modules passed. Compileall and `git diff --check` passed. These
+  focused runs used the local Python 3.13 plus the virtualenv package path; they
+  do not replace the complete supported-version Windows test matrix.
 - Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket
