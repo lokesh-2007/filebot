@@ -247,6 +247,29 @@ class ParserResourceLimitTests(unittest.TestCase):
 
 
 class BoundedEmbeddingTests(unittest.TestCase):
+    def test_missing_embedding_batch_uses_eight_chunk_batches(self) -> None:
+        class FakeEmbedder:
+            def __init__(self):
+                self.batch_sizes = []
+
+            def embed(self, texts):
+                self.batch_sizes.append(len(texts))
+                return [SimpleNamespace(tolist=lambda: [0.0]) for _ in texts]
+
+        class FakeCollection:
+            def upsert(self, **_kwargs):
+                return None
+
+        engine = HybridEngine({"models": {"embeddings": {}}}, object())
+        embedder = FakeEmbedder()
+        engine._embedder = embedder
+        engine._collection = FakeCollection()
+
+        engine.upsert(Path("notes.txt"), [SimpleNamespace(text=f"line {i}") for i in range(9)],
+                      content_hash="test", refresh_lexical=False)
+
+        self.assertEqual(embedder.batch_sizes, [8, 1])
+
     def test_bm25_tokenization_disables_console_progress_for_pythonw(self) -> None:
         calls = []
 

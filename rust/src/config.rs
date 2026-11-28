@@ -163,7 +163,7 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
         || index.background_poll_seconds <= 0.0
         || index.background_poll_seconds > 3600.0
         || !index.background_poll_seconds.is_finite()
-        || index.background_batch_size == 0
+        || !(1..=10).contains(&index.background_batch_size)
     {
         return Err(ConfigError::Invalid(
             "index debounce, poll, and batch values are invalid".into(),
@@ -181,8 +181,8 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
             "Ollama model and URL must be configured".into(),
         ));
     }
-    if !(512..=32_768).contains(&settings.models.ollama.num_ctx)
-        || !(1..=4096).contains(&settings.models.ollama.num_predict)
+    if !(512..=4096).contains(&settings.models.ollama.num_ctx)
+        || !(1..=settings.models.ollama.num_ctx).contains(&settings.models.ollama.num_predict)
         || !(1..=120).contains(&settings.models.ollama.startup_timeout_seconds)
     {
         return Err(ConfigError::Invalid(
@@ -190,7 +190,7 @@ fn validate(settings: &Settings) -> Result<(), ConfigError> {
         ));
     }
     if settings.models.embeddings.model.trim().is_empty()
-        || settings.models.embeddings.batch_size == 0
+        || !(1..=16).contains(&settings.models.embeddings.batch_size)
     {
         return Err(ConfigError::Invalid(
             "embedding model and positive batch size are required".into(),
@@ -319,7 +319,7 @@ fn default_background_poll_seconds() -> f64 {
     1.0
 }
 fn default_embedding_batch_size() -> usize {
-    64
+    8
 }
 fn default_idle_unload_seconds() -> u64 {
     120
@@ -348,6 +348,23 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/settings.yaml");
         let mut settings = load_settings(path).unwrap();
         settings.index.chunk_overlap = settings.index.chunk_chars;
+        assert!(validate(&settings).is_err());
+    }
+
+    #[test]
+    fn rejects_memory_settings_outside_the_supported_python_profile() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/settings.yaml");
+        let mut settings = load_settings(path).unwrap();
+        settings.models.ollama.num_ctx = 8192;
+        assert!(validate(&settings).is_err());
+        settings.models.ollama.num_ctx = 4096;
+        settings.models.ollama.num_predict = 4097;
+        assert!(validate(&settings).is_err());
+        settings.models.ollama.num_predict = 256;
+        settings.models.embeddings.batch_size = 17;
+        assert!(validate(&settings).is_err());
+        settings.models.embeddings.batch_size = 8;
+        settings.index.background_batch_size = 11;
         assert!(validate(&settings).is_err());
     }
 

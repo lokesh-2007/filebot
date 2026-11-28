@@ -41,7 +41,10 @@ application passes the Windows UI and performance gates below.
   and unloads model resources after the configured idle interval.
 - Ollama context/generation limits and embedding batch size are configurable;
   defaults cap context at 4096 tokens, output at 256 tokens, and embedding
-  batches at 16 chunks. A 2-minute keep-alive warms back-to-back turns, while
+  batches at 16 chunks. Validation follows the Python-supported bounds: context
+  at most 4096, output no larger than context, embedding batches at most 16,
+  and background indexing batches at most 10. Omitted embedding batch size
+  defaults to eight. A 2-minute keep-alive warms back-to-back turns, while
   lifecycle sleep explicitly unloads the model.
 - Turn diagnostics expose preflight time, time-to-first-token, total latency,
   and response length without recording prompt or response text.

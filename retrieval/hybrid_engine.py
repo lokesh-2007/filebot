@@ -93,7 +93,7 @@ class HybridEngine:
     def upsert(self, file_path: Path, chunks: list[Any], *, content_hash: str,
                refresh_lexical: bool = True) -> None:
         with self._lock:
-            batch_size = max(1, int(self.settings["models"]["embeddings"].get("batch_size", 64)))
+            batch_size = max(1, int(self.settings["models"]["embeddings"].get("batch_size", 8)))
             normalized = str(file_path.expanduser().resolve())
             for start in range(0, len(chunks), batch_size):
                 batch = chunks[start:start + batch_size]

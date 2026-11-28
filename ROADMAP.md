@@ -31,6 +31,11 @@ still being validated.
   and use SQLite lexical fallback. The 3.5–4 GB product target is not yet a
   measured or OS-enforced hard limit, especially when Ollama is already running
   outside FileBot.
+- Align Rust model and indexing validation with Python's supported bounded
+  profile: context at most 4096, generation no greater than context, embedding
+  batches at most 16, and background indexing batches at most 10. When an older
+  settings file omits embedding batch size, both implementations now use the
+  bounded default of eight rather than Rust's prior 64-chunk default.
 - A configurable `runtime.managed_model_memory_budget_mib` soft budget defaults
   to 4096 MiB. After a completed chat turn, FileBot samples its and its own
   Ollama server's working sets and requests model unload at 90% of that budget;
@@ -147,12 +152,13 @@ still being validated.
   `socket.accept` → `asyncio.proactor_events._make_self_pipe`, consistent with
   the session's denied socket operations; an isolated UI/model integration run
   on the supported Windows test environment is still required.
-- After filename fallback ranking was added, 45 `test_core.py` tests passed
-  with 21 asyncio/model cases deselected, and 85 tests across benchmark, chat,
-  config, retrieval, file operations, Ollama tool bridge, startup, watcher, and
-  Qt lifecycle modules passed. Compileall and `git diff --check` passed. These
-  focused runs used the local Python 3.13 plus the virtualenv package path; they
-  do not replace the complete supported-version Windows test matrix.
+- After filename fallback ranking and memory-profile parity changes, 45
+  `test_core.py` tests passed with 21 asyncio/model cases deselected, and 88
+  tests across benchmark, chat, config, retrieval, file operations, Ollama tool
+  bridge, startup, watcher, and Qt lifecycle modules passed. Compileall and
+  `git diff --check` passed. These focused runs used the local Python 3.13 plus
+  the virtualenv package path; they do not replace the complete supported
+  version Windows test matrix.
 - Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket

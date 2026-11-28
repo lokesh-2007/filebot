@@ -108,7 +108,7 @@ def load_settings(path: str | Path) -> dict[str, Any]:
             raise RuntimeError(f"FileBot settings section 'models.{section}' is missing: {', '.join(missing)}")
     embeddings = models["embeddings"]
     embedding_batch_size = _validate_number(
-        embeddings.get("batch_size", 64), "models.embeddings.batch_size", minimum=1, integer=True,
+        embeddings.get("batch_size", 8), "models.embeddings.batch_size", minimum=1, integer=True,
     )
     if embedding_batch_size > 16:
         raise RuntimeError("FileBot setting 'models.embeddings.batch_size' must be at most 16 for bounded memory use")
@@ -126,9 +126,11 @@ def load_settings(path: str | Path) -> dict[str, Any]:
     )
     if num_ctx > 4096:
         raise RuntimeError("FileBot setting 'models.ollama.num_ctx' must be at most 4096 for the supported memory profile")
-    _validate_number(
+    num_predict = _validate_number(
         ollama.get("num_predict", 256), "models.ollama.num_predict", minimum=1, integer=True,
     )
+    if num_predict > num_ctx:
+        raise RuntimeError("FileBot setting 'models.ollama.num_predict' cannot exceed models.ollama.num_ctx")
     return settings
 
 

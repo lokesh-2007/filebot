@@ -132,6 +132,24 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "managed_model_memory_budget_mib.*16384"):
                 load_settings(path)
 
+    def test_missing_embedding_batch_uses_bounded_default(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["models"]["embeddings"].pop("batch_size")
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            loaded = load_settings(path)
+            self.assertNotIn("batch_size", loaded["models"]["embeddings"])
+
+    def test_generation_limit_cannot_exceed_context_limit(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "settings.yaml"
+            settings = load_settings(ROOT / "config" / "settings.yaml")
+            settings["models"]["ollama"]["num_predict"] = 4097
+            path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "num_predict.*cannot exceed"):
+                load_settings(path)
+
 
 if __name__ == "__main__":
     unittest.main()
