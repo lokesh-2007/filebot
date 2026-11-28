@@ -9,6 +9,7 @@
   preserving exact filename ranking; refresh the 10k/100k timing baseline.
 - Wire Rust Stop cancellation through Ollama readiness polling, with cleanup
   limited to the server child FileBot started.
+- Add a native Rust vocabulary editor backed by the persisted SQLite glossary.
 - Improve SQLite fallback retrieval for exact filenames and filename-only
   queries by matching query terms in file names and ranking stronger name hits
   ahead of body-only matches. Record the measured 10k/100k latency tradeoff.

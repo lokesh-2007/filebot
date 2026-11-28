@@ -168,14 +168,14 @@ still being validated.
   retrieval feedback/glossary behavior, accessible result opening, and Windows
   UI verification. The core now starts/rechecks local Ollama on model use,
   expands persisted glossary entries, ranks open/vote signals, and the native UI
-  can record votes. A Rust glossary editor and Windows UI verification remain
-  open. Startup cancellation is now wired through the UI/lifecycle/runtime and
+  can record votes. The native UI now opens a SQLite-backed glossary editor;
+  Windows visual and interaction verification remain open. Startup cancellation is now wired through the UI/lifecycle/runtime and
   stops only a FileBot-owned server child during readiness polling. Readiness
   HTTP probes are capped at two seconds, then cancellation is checked again;
   Rust formatting, offline core/desktop checks, and Clippy pass. Cancellation
   tests are present but could not be executed because the test binary cannot
-  link ONNX Runtime (`OrtGetApiBase` is unresolved in this environment). Keep Python as the default
-  until parity and measurements pass.
+  link ONNX Runtime (`OrtGetApiBase` is unresolved in this environment). Keep
+  Python as the default until parity and measurements pass.
 - In this Windows session, Rust formatting, offline core/desktop `cargo check`,
   and both Clippy targets pass with `ORT_SKIP_DOWNLOAD=1`. Core tests compile
   through the test crate but cannot link because the ONNX Runtime library is

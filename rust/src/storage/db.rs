@@ -451,6 +451,20 @@ impl Database {
         Ok(())
     }
 
+    /// Return the persisted shorthand glossary for the native editor.
+    pub fn glossary_entries(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, StorageError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare("SELECT alias,expansion FROM glossary ORDER BY alias COLLATE NOCASE")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(StorageError::from)
+    }
+
     /// Expand configured aliases at token boundaries, longest alias first.
     pub fn expand_glossary(&self, query: &str) -> Result<String, StorageError> {
         let connection = self.connect()?;
@@ -1221,6 +1235,7 @@ mod tests {
         let edited =
             std::collections::HashMap::from([("pbrief".into(), "product $specification".into())]);
         db.replace_glossary_entries(&edited).unwrap();
+        assert_eq!(db.glossary_entries().unwrap(), edited);
         db.seed_glossary_entries(&defaults).unwrap();
         assert_eq!(
             db.expand_glossary("pbrief").unwrap(),

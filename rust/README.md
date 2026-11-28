@@ -25,7 +25,9 @@ application passes the Windows UI and performance gates below.
   transactionally, and Rust search expands aliases at word boundaries.
 - Successful opens and helpful/unhelpful votes persist in the shared
   `file_signals` table and apply a bounded ranking adjustment; the native UI
-  exposes votes for its selected result.
+  exposes votes for its selected result. Its Edit vocabulary window replaces
+  the persisted shorthand glossary from validated `alias=expansion` lines; the
+  next local search uses saved edits.
 - ONNX and model weights remain unloaded until `HybridEngine::activate()`; an
   inactive engine still serves local FTS5 search. The model is cached locally
   after first use, and subsequent activation can run without network access.

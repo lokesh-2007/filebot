@@ -42,21 +42,23 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DispatchMessageW, ES_AUTOHSCROLL,
-            ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
+            ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
             GetWindowLongPtrW, GetWindowRect, GetWindowTextW, HTCAPTION, HWND_TOPMOST, IDC_ARROW,
             IsWindowVisible, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LBN_DBLCLK,
             LBS_NOTIFY, LoadCursorW, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
             SWP_NOACTIVATE, SWP_NOSIZE, SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE,
-            WM_DESTROY, WM_EXITSIZEMOVE, WM_HOTKEY, WM_NCHITTEST, WM_NCLBUTTONUP, WM_TIMER,
+            WM_DESTROY, WM_EXITSIZEMOVE, WM_HOTKEY, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONUP,
+            WM_TIMER,
             WNDCLASSW, WS_BORDER, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_HSCROLL, WS_OVERLAPPED, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+            WS_HSCROLL, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
 
 const CLASS: &str = "FileBotNativeShell";
 const AVATAR_CLASS: &str = "FileBotAvatar";
+const GLOSSARY_CLASS: &str = "FileBotGlossaryEditor";
 const HOTKEY_ID: i32 = 1;
 const TIMER_ID: usize = 7;
 const ID_PROMPT: usize = 101;
@@ -73,6 +75,10 @@ const ID_RESULTS: usize = 111;
 const ID_OPEN_SELECTED: usize = 112;
 const ID_HELPFUL: usize = 113;
 const ID_UNHELPFUL: usize = 114;
+const ID_GLOSSARY: usize = 115;
+const ID_GLOSSARY_TEXT: usize = 116;
+const ID_GLOSSARY_SAVE: usize = 117;
+const ID_GLOSSARY_CANCEL: usize = 118;
 
 type Runtime = BotRuntime<LocalOllamaClient, FileBotTools>;
 type Lifecycle = LifecycleManager<Runtime>;
@@ -104,6 +110,15 @@ struct AppState {
     file_roots: Vec<PathBuf>,
     last_pending_refresh: Instant,
     last_status_refresh: Instant,
+    glossary_window: HWND,
+}
+
+struct GlossaryWindowState {
+    db: Database,
+    owner: HWND,
+    editor: HWND,
+    status: HWND,
+    initial_text: String,
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -258,6 +273,17 @@ unsafe extern "system" fn window_proc(
             100,
             28,
         );
+        create_control(
+            hwnd,
+            "BUTTON",
+            "Edit vocabulary",
+            ID_GLOSSARY,
+            BS_PUSHBUTTON as u32,
+            394,
+            238,
+            130,
+            28,
+        );
         state.pending_label = create_control(
             hwnd,
             "STATIC",
@@ -325,6 +351,7 @@ unsafe extern "system" fn window_proc(
                 ID_OPEN_SELECTED => open_selected(state),
                 ID_HELPFUL => record_feedback(state, true),
                 ID_UNHELPFUL => record_feedback(state, false),
+                ID_GLOSSARY => open_glossary_editor(state),
                 ID_RESULTS if notification == LBN_DBLCLK as usize => open_selected(state),
                 ID_ASK => ask(state),
                 ID_CANCEL => {
@@ -473,6 +500,232 @@ fn append_output(hwnd: HWND, text: &str) {
     let wide = wide(&content);
     unsafe {
         SetWindowTextW(hwnd, wide.as_ptr());
+    }
+}
+
+fn open_glossary_editor(state: &mut AppState) {
+    if !state.glossary_window.is_null() {
+        unsafe { ShowWindow(state.glossary_window, SW_SHOW) };
+        return;
+    }
+    let entries = match state.db.glossary_entries() {
+        Ok(entries) => entries,
+        Err(error) => {
+            append_output(state.output, &format!("\r\nCould not load vocabulary: {error}"));
+            return;
+        }
+    };
+    let mut rows: Vec<_> = entries.into_iter().collect();
+    rows.sort_by_key(|row| row.0.to_lowercase());
+    let initial_text = rows
+        .into_iter()
+        .map(|(alias, expansion)| format!("{alias}={expansion}"))
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    let mut editor_state = Box::new(GlossaryWindowState {
+        db: state.db.clone(),
+        owner: state.popover,
+        editor: std::ptr::null_mut(),
+        status: std::ptr::null_mut(),
+        initial_text,
+    });
+    let class = wide(GLOSSARY_CLASS);
+    let title = wide("FileBot search vocabulary");
+    let window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            class.as_ptr(),
+            title.as_ptr(),
+            WS_OVERLAPPEDWINDOW,
+            120,
+            120,
+            620,
+            520,
+            state.popover,
+            std::ptr::null_mut(),
+            GetModuleHandleW(std::ptr::null()),
+            (&mut *editor_state as *mut GlossaryWindowState).cast::<c_void>(),
+        )
+    };
+    if window.is_null() {
+        append_output(state.output, "\r\nCould not open the vocabulary editor.");
+        drop(editor_state);
+    } else {
+        state.glossary_window = window;
+        unsafe { ShowWindow(window, SW_SHOW) };
+    }
+}
+
+unsafe extern "system" fn glossary_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_CREATE {
+        let create = unsafe {
+            &*(lparam as *const windows_sys::Win32::UI::WindowsAndMessaging::CREATESTRUCTW)
+        };
+        let state = unsafe { &mut *(create.lpCreateParams as *mut GlossaryWindowState) };
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize) };
+        let instruction = wide("One alias=expansion per line. Save replaces the current vocabulary.");
+        let label = wide("Example: spec=product specification");
+        let static_class = wide("STATIC");
+        unsafe {
+            CreateWindowExW(
+                0,
+                static_class.as_ptr(),
+                instruction.as_ptr(),
+                WS_CHILD | WS_VISIBLE,
+                16,
+                14,
+                570,
+                24,
+                hwnd,
+                std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            );
+            CreateWindowExW(
+                0,
+                static_class.as_ptr(),
+                label.as_ptr(),
+                WS_CHILD | WS_VISIBLE,
+                16,
+                38,
+                570,
+                22,
+                hwnd,
+                std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            );
+        }
+        let edit_class = wide("EDIT");
+        let text = wide(&state.initial_text);
+        state.editor = unsafe {
+            CreateWindowExW(
+                WS_BORDER,
+                edit_class.as_ptr(),
+                text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE as u32
+                    | ES_AUTOVSCROLL as u32 | WS_VSCROLL,
+                16,
+                68,
+                570,
+                350,
+                hwnd,
+                ID_GLOSSARY_TEXT as _,
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        };
+        unsafe { SendMessageW(state.editor, 0x00c5, 262_143, 0) };
+        state.status = create_control(hwnd, "STATIC", "", 0, 0, 16, 426, 570, 24);
+        create_control(
+            hwnd,
+            "BUTTON",
+            "Save vocabulary",
+            ID_GLOSSARY_SAVE,
+            BS_PUSHBUTTON as u32,
+            356,
+            454,
+            110,
+            30,
+        );
+        create_control(
+            hwnd,
+            "BUTTON",
+            "Cancel",
+            ID_GLOSSARY_CANCEL,
+            BS_PUSHBUTTON as u32,
+            476,
+            454,
+            90,
+            30,
+        );
+        return 0;
+    }
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut GlossaryWindowState;
+    if pointer.is_null() {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
+    let state = unsafe { &mut *pointer };
+    match msg {
+        WM_COMMAND => match wparam & 0xffff {
+            ID_GLOSSARY_SAVE => {
+                let mut buffer = vec![0u16; 262_144];
+                let length = unsafe {
+                    GetWindowTextW(state.editor, buffer.as_mut_ptr(), buffer.len() as i32)
+                }
+                .max(0) as usize;
+                let text = String::from_utf16_lossy(&buffer[..length]);
+                let mut entries = std::collections::HashMap::new();
+                for (line_number, line) in text.lines().enumerate() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let Some((alias, expansion)) = line.split_once('=') else {
+                        let message = wide(&format!(
+                            "Line {} needs alias=expansion.", line_number + 1
+                        ));
+                        unsafe { SetWindowTextW(state.status, message.as_ptr()) };
+                        return 0;
+                    };
+                    if entries
+                        .insert(alias.trim().to_owned(), expansion.trim().to_owned())
+                        .is_some()
+                    {
+                        let message = wide(&format!(
+                            "Line {} repeats an alias; aliases must be unique.", line_number + 1
+                        ));
+                        unsafe { SetWindowTextW(state.status, message.as_ptr()) };
+                        return 0;
+                    }
+                }
+                match state.db.replace_glossary_entries(&entries) {
+                    Ok(()) => {
+                        let message = wide("Vocabulary saved. It applies to the next search.");
+                        unsafe {
+                            SetWindowTextW(state.status, message.as_ptr());
+                            let owner_state =
+                                GetWindowLongPtrW(state.owner, GWLP_USERDATA) as *mut AppState;
+                            if !owner_state.is_null() {
+                                append_output(
+                                    (*owner_state).output,
+                                    "\r\nVocabulary saved; it applies to the next search.",
+                                );
+                            }
+                            windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+                        }
+                    }
+                    Err(error) => {
+                        let message = wide(&format!("Could not save vocabulary: {error}"));
+                        unsafe { SetWindowTextW(state.status, message.as_ptr()) };
+                    }
+                }
+                0
+            }
+            ID_GLOSSARY_CANCEL => {
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                0
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        },
+        WM_NCDESTROY => {
+            let owner = state.owner;
+            let owner_state = unsafe { GetWindowLongPtrW(owner, GWLP_USERDATA) } as *mut AppState;
+            if !owner_state.is_null() {
+                unsafe { (*owner_state).glossary_window = std::ptr::null_mut() };
+            }
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(pointer));
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
@@ -889,9 +1142,11 @@ fn run() -> Result<(), String> {
         file_roots,
         last_pending_refresh: Instant::now(),
         last_status_refresh: Instant::now(),
+        glossary_window: std::ptr::null_mut(),
     });
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     register_class(CLASS, window_proc, instance)?;
+    register_class(GLOSSARY_CLASS, glossary_window_proc, instance)?;
     let class_name = wide(CLASS);
     let popover_name = wide("FileBot · Local search and assistant");
     let screen_w =
