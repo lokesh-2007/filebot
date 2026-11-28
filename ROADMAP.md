@@ -172,6 +172,10 @@ still being validated.
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket
   policy; the PDF's RAM and latency targets remain goals, not measured claims.
+- A fresh loopback check on 28 November 2026 found no listeners on ports 11434
+  or 11435, and Windows rejected both HTTP probes with a socket-permissions
+  error. This sandbox therefore cannot provide a new live cold/warm Ollama run,
+  managed unload/reload validation, or full-stack RAM/GPU measurement.
 - Complete Rust feature parity, including local model start/recovery, hybrid
   retrieval feedback/glossary behavior, accessible result opening, and Windows
   UI verification. The core now starts/rechecks local Ollama on model use,
