@@ -160,6 +160,14 @@ still being validated.
   `git diff --check` passed. These focused runs used the local Python 3.13 plus
   the virtualenv package path; they do not replace the complete supported
   version Windows test matrix.
+- A subsequent local Windows run on Python 3.13 passed 85 tests across the
+  repository virtualenv's config (11), retrieval (23), startup (1), watcher
+  (4), chat-context (8), file-operation (6), Ollama bridge (3), and Qt lifecycle
+  (29) modules. Nine additional `test_core.py` direct file/approval cases and
+  the OneDrive redirected Documents folder-open case passed separately. The
+  retrieval run corrected an environment-dependent test: missing `bm25s` is
+  now explicitly simulated. These focused tests do not replace Python 3.11/3.12
+  or full-suite acceptance.
 - Repeat cold startup, warm chat, indexing, peak total chatbot RAM, GPU/shared
   memory, dormant working set, and idle unload on supported Windows machines.
   The current benchmark cannot reach Ollama under this environment's socket

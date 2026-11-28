@@ -331,7 +331,7 @@ class BoundedEmbeddingTests(unittest.TestCase):
         )
         engine._collection = SimpleNamespace(query=lambda **_kwargs: {"ids": [[]]})
 
-        with patch("sys.stdout", None):
+        with patch.dict(sys.modules, {"bm25s": None}), patch("sys.stdout", None):
             engine._refresh_bm25()
             result = engine._search_locked("matching terms", 1)
 
