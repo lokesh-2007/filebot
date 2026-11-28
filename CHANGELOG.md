@@ -5,6 +5,8 @@
 - Align Rust memory-sensitive context, output, embedding, and indexing batch
   validation with the supported Python profile; use eight as the bounded
   fallback embedding batch in both implementations.
+- Treat SQL wildcard characters in SQLite fallback queries literally, while
+  preserving exact filename ranking; refresh the 10k/100k timing baseline.
 - Improve SQLite fallback retrieval for exact filenames and filename-only
   queries by matching query terms in file names and ranking stronger name hits
   ahead of body-only matches. Record the measured 10k/100k latency tradeoff.

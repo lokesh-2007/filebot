@@ -45,13 +45,14 @@ still being validated.
   validation on supported hardware.
 - The SQLite `LIKE` lexical fallback now matches filename terms individually
   and ranks exact filenames and stronger filename matches ahead of body-only
-  hits. After this change it measured 38.85 ms p50 / 52.35 ms p95 at 10,000
-  synthetic chunks and 334.33 ms p50 / 374.93 ms p95 at 100,000 chunks (21
-  searches per size, one matching row). Filename prioritization adds work to
-  the bounded fallback; 100k p95 rose from the prior 281.15 ms baseline. This
-  remains a synthetic in-memory fixture, not a disk-heavy personal-corpus
-  benchmark or a defined latency SLA. No persistent FTS index has been added;
-  larger or slower real corpora still need measurement.
+  hits. `%`, `_`, and backslash in user queries are escaped so SQLite treats
+  them as literal text. After these changes it measured 35.69 ms p50 / 41.57 ms
+  p95 at 10,000 synthetic chunks and 368.33 ms p50 / 401.31 ms p95 at 100,000
+  chunks (21 searches per size, one matching row). Filename prioritization and
+  literal matching add work to the fallback; 100k p95 rose from the prior
+  281.15 ms baseline. This remains a synthetic in-memory fixture, not a
+  disk-heavy personal-corpus benchmark or a defined latency SLA. No persistent
+  FTS index has been added; larger or slower real corpora still need measurement.
 - Ollama integration was retried on the local Windows host. The standard
   `11434` port is not visible in the current listener list, but Ollama itself
   reports it cannot bind because the address is already in use. Starting the

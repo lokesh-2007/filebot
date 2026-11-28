@@ -166,6 +166,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(results[0]["file_name"], "budget-plan.md")
         self.assertIn("background.txt", {row["file_name"] for row in results})
 
+    def test_lexical_fallback_treats_sql_wildcards_as_literal_query_text(self) -> None:
+        special = self.root / "report_100%.txt"
+        ordinary = self.root / "ordinary.txt"
+        for path, content in (
+            (special, "A report with literal punctuation."),
+            (ordinary, "An unrelated local note."),
+        ):
+            self.db.replace_file(
+                path, content_hash=path.name, size=len(content), mtime=1.0,
+                chunks=[{"text": content}],
+            )
+
+        self.assertEqual(
+            [row["file_name"] for row in self.db.search_lexical("%")],
+            ["report_100%.txt"],
+        )
+        self.assertEqual(
+            [row["file_name"] for row in self.db.search_lexical("_")],
+            ["report_100%.txt"],
+        )
+
     def test_open_and_feedback_signals_are_persisted(self) -> None:
         path = self.root / "feedback.md"
         self.db.replace_file(

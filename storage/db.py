@@ -531,25 +531,31 @@ class Database:
     def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
         """Fallback lexical search, ranking filename hits ahead of body-only hits."""
         normalized = query.strip()
-        terms = [f"%{term}%" for term in normalized.split() if term]
+        terms = [self._like_pattern(term) for term in normalized.split() if term]
         if not terms:
             return []
-        clause = " OR ".join("c.snippet LIKE ?" for _ in terms)
-        filename_clause = " OR ".join("f.file_name LIKE ?" for _ in terms)
+        clause = " OR ".join("c.snippet LIKE ? ESCAPE '\\'" for _ in terms)
+        filename_clause = " OR ".join("f.file_name LIKE ? ESCAPE '\\'" for _ in terms)
         name_match_count = " + ".join(
-            "CASE WHEN f.file_name LIKE ? THEN 1 ELSE 0 END" for _ in terms
+            "CASE WHEN f.file_name LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END" for _ in terms
         )
         with self.connect() as connection:
             return list(connection.execute(f"""SELECT c.chunk_id,c.snippet,f.path,f.file_name,c.page_or_line,c.heading,
                 COALESCE(s.open_count,0) AS open_count,COALESCE(s.upvotes,0) AS upvotes,
                 COALESCE(s.downvotes,0) AS downvotes
                 FROM chunks c JOIN files f USING(file_id) LEFT JOIN file_signals s USING(file_id)
-                WHERE f.status='indexed' AND (({clause}) OR ({filename_clause}) OR f.file_name LIKE ?)
+                WHERE f.status='indexed' AND (({clause}) OR ({filename_clause}) OR f.file_name LIKE ? ESCAPE '\\')
                 ORDER BY (f.file_name = ? COLLATE NOCASE) DESC,
                          ({name_match_count}) DESC,
                          length(f.file_name) ASC,
                          f.mtime DESC, f.path COLLATE NOCASE
-                LIMIT ?""", (*terms, *terms, f"%{normalized}%", normalized, *terms, limit)))
+                LIMIT ?""", (*terms, *terms, self._like_pattern(normalized), normalized, *terms, limit)))
+
+    @staticmethod
+    def _like_pattern(value: str) -> str:
+        """Build a substring LIKE pattern that treats user text literally."""
+        escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
 
     def stage_command(
         self, command: str, cwd: str, reason: str, risk: str, status: str = "pending",
