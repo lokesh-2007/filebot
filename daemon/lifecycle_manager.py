@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,27 +25,9 @@ class _WakeWorker(QThread):
     def run(self) -> None:
         engine = runtime = None
         try:
-            from agent.bot_runtime import BotRuntime
-            if self.settings.get("runtime", {}).get("demo_mode"):
-                # Demo: FTS5-only retrieval and a model-free answerer; no downloads needed.
-                from agent.demo_llm import DemoServer
-                from agent.fast_router import FastRouter
-                from retrieval.lexical_engine import LexicalEngine
-
-                class _DemoRouter(FastRouter):
-                    def route(self, prompt: str) -> str:
-                        intent = super().route(prompt)
-                        return "search" if intent == "chat" else intent
-
-                engine = LexicalEngine(self.settings, self.db)
-                engine.activate()
-                runtime = BotRuntime(self.settings, self.db, engine, server=DemoServer())
-                runtime.router = _DemoRouter()
-            else:
-                from retrieval.hybrid_engine import HybridEngine
-                engine = HybridEngine(self.settings, self.db)
-                engine.activate()
-                runtime = BotRuntime(self.settings, self.db, engine)
+            from service_factory import build_services, requested_mode
+            mode = requested_mode(self.settings, sys.argv)
+            engine, runtime, _caps = build_services(self.settings, self.db, mode)
             self.result = (engine, runtime)
             self.ready.emit(engine, runtime, "")
         except Exception as exc:
@@ -63,6 +46,7 @@ class LifecycleManager(QObject):
     popover_ready = pyqtSignal(object)
     status_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    quit_requested = pyqtSignal()
 
     def __init__(self, settings: dict[str, Any], db: Database, project_root: Path) -> None:
         super().__init__()
@@ -86,9 +70,22 @@ class LifecycleManager(QObject):
             self._cancel_wake = True
             self.status_changed.emit("sleep")
         elif self._active:
-            self.sleep()
+            if self.popover is not None and not self.popover.isVisible():
+                self.wake()  # minimised: bring the panel back instead of unloading
+            else:
+                self.sleep()
         else:
             self.wake()
+
+    def minimize(self) -> None:
+        """Hide the panel but stay awake; the idle timer still unloads models eventually."""
+        if self.popover is not None:
+            self.popover.hide()
+        self.touch()
+
+    def request_quit(self) -> None:
+        """End the whole process: the app's aboutToQuit hooks stop the watcher, hotkey and LLM."""
+        self.quit_requested.emit()
 
     def wake(self) -> None:
         if self._active:
@@ -131,6 +128,9 @@ class LifecycleManager(QObject):
         self.popover.work_started.connect(self.begin_work)
         self.popover.work_finished.connect(self.end_work)
         self.popover.status_changed.connect(self.set_status)
+        self.popover.minimize_requested.connect(self.minimize)
+        self.popover.close_requested.connect(self.sleep)
+        self.popover.quit_requested.connect(self.request_quit)
         self.popover_ready.emit(self.popover)
         self.popover.show()
         from retrieval.index_worker import IndexQueueService

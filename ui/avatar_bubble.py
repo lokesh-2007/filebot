@@ -1,9 +1,11 @@
 """Frameless always-on-top avatar that snaps to a screen corner."""
 from __future__ import annotations
 
+from typing import Any
+
 from PyQt6.QtCore import QPointF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QRadialGradient
-from PyQt6.QtWidgets import QLabel, QWidget
+from PyQt6.QtWidgets import QLabel, QMenu, QWidget
 
 STATE_COLORS = {"sleep": "#6a5de0", "active": "#34d399", "cmd_pending": "#f5a524"}
 
@@ -11,6 +13,7 @@ STATE_COLORS = {"sleep": "#6a5de0", "active": "#34d399", "cmd_pending": "#f5a524
 class AvatarBubble(QWidget):
     toggled = pyqtSignal()
     status_changed = pyqtSignal(str)
+    quit_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
@@ -94,6 +97,21 @@ class AvatarBubble(QWidget):
         if screen:
             area = screen.availableGeometry()
             self.move(area.right() - self.width() - 12, area.bottom() - self.height() - 12)
+
+    def contextMenuEvent(self, event: Any) -> None:  # noqa: N802 (Qt API)
+        """Right-click: open/close the panel or end the whole FileBot process."""
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu{background:#1b1930;color:#ecebf7;border:1px solid #2f2c4d;padding:4px}"
+                           "QMenu::item{padding:6px 18px;border-radius:5px}"
+                           "QMenu::item:selected{background:#6a5de0}")
+        toggle = menu.addAction("Open / close FileBot")
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit FileBot (end task)")
+        chosen = menu.exec(event.globalPos())
+        if chosen is toggle:
+            self.toggled.emit()
+        elif chosen is quit_action:
+            self.quit_requested.emit()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

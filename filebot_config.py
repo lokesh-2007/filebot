@@ -88,6 +88,8 @@ def load_settings(path: str | Path, user_path: str | Path | None = None) -> dict
     _validate_number(index.get("background_poll_seconds", 1.0), "index.background_poll_seconds", minimum=0, exclusive=True)
     if not isinstance(settings["runtime"]["hotkey"], str) or not settings["runtime"]["hotkey"].strip():
         raise RuntimeError("FileBot setting 'runtime.hotkey' must be a non-empty string")
+    if settings["runtime"].get("mode", "auto") not in ("auto", "lite", "full"):
+        raise RuntimeError("FileBot setting 'runtime.mode' must be auto, lite or full")
     _validate_number(settings["runtime"].get("idle_unload_seconds", 120),
                      "runtime.idle_unload_seconds", minimum=1, integer=True)
     models = settings["models"]

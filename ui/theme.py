@@ -54,6 +54,13 @@ def stylesheet() -> str:
                    padding:7px 14px; font-weight:600; }}
     QPushButton:hover {{ border:1px solid {p['accent']}; }}
     QPushButton:disabled {{ color:{p['muted']}; background:{p['surface']}; }}
+    QPushButton#winbtn {{ min-width:26px; max-width:26px; min-height:22px; max-height:22px; padding:0;
+                          border-radius:7px; font-size:12pt; font-weight:600; }}
+    QPushButton#winbtn:hover {{ background:{p['border']}; }}
+    QPushButton#winquit {{ min-height:22px; max-height:22px; padding:0 9px; border-radius:7px;
+                           font-size:8.5pt; font-weight:600; color:{p['danger']};
+                           border:1px solid {p['danger']}; background:transparent; }}
+    QPushButton#winquit:hover {{ background:{p['danger']}; color:white; }}
     QPushButton#primary {{ background:{p['accent']}; border:0; color:white; }}
     QPushButton#primary:hover {{ background:{p['accent_hi']}; }}
     QPushButton#primary:disabled {{ background:#3a3560; color:#a39fc8; }}

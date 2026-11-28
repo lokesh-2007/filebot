@@ -31,6 +31,8 @@ Current version: see `filebot_version.py` (the single source of truth) and `CHAN
 - `scripts/setup.ps1`, `scripts/start.ps1` — environment setup and desktop-session launch.
 - `tests/` — unit, Qt lifecycle, retrieval, watcher, startup, tool-bridge, and runtime checks. `tests/fake_llama_server.py` stands in for the real engine so runtime tests need no model.
 
+- Window controls: `PopoverCard` emits `minimize_requested/close_requested/quit_requested` (buttons `minimize_button/close_button/quit_button`), `LifecycleManager` maps them to hide / `sleep()` / `quit_requested` -> `app.quit`; `AvatarBubble` right-click menu emits `quit_requested`. `toggle()` re-shows a minimised panel instead of sleeping.
+- `service_factory.py` — picks engine + answerer per `runtime.mode` (auto/lite/full) and sets `runtime.capabilities`; `_WakeWorker` calls `build_services`. Lite/auto-without-models reuses `LexicalEngine` + `DemoServer`.
 - `demo_support.py`, `agent/demo_llm.py`, `retrieval/lexical_engine.py` — demo mode (`--demo`): sample files, FTS5-only search, model-free answerer plugged in as `BotRuntime(server=DemoServer())`. `ui/theme.py` and `ui/result_delegate.py` hold the popover styling; tests rely on `results` items being `path\nsnippet` text and on the first `QLabel` of a pending card holding command/reason/cwd.
 
 ## Safety and privacy invariants

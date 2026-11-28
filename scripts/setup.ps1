@@ -9,9 +9,18 @@ if ($null -eq $pythonLauncher) {
 }
 
 $pythonVersion = $null
-foreach ($candidate in @("-3.12")) {
-    & $pythonLauncher.Source $candidate -c "import struct,sys; sys.exit(0 if sys.maxsize > 2**32 else 1)" *> $null
-    if ($LASTEXITCODE -eq 0) {
+foreach ($candidate in @("-3.12", "-3.11")) {
+    # py.exe prints "No suitable Python runtime found" to stderr when a version is absent; under
+    # $ErrorActionPreference=Stop, Windows PowerShell 5.1 would turn that into a terminating error.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $pythonLauncher.Source $candidate -c "import struct,sys; sys.exit(0 if sys.maxsize > 2**32 else 1)" 2>$null | Out-Null
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -eq 0) {
         $pythonVersion = $candidate
         break
     }
@@ -27,7 +36,7 @@ if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
 }
 
 $python = Join-Path $venv "Scripts\python.exe"
-& $python -c "import sys; sys.exit(0 if sys.version_info[:2] in ((3,11),(3,12)) else 1)" *> $null
+& $python -c "import sys; sys.exit(0 if sys.version_info[:2] in ((3,11),(3,12)) else 1)" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "The existing .venv does not use Python 3.11 or 3.12. Remove that virtual environment and rerun setup."
 }
@@ -45,4 +54,4 @@ if (-not (Test-Path $model)) {
     Write-Warning "Place the GGUF model at $model (see README, 'Local model'). Packaged builds bundle both files."
 }
 
-Write-Host "FileBot setup is ready. Start it with: .\scripts\start.ps1"
+Write-Host "FileBot setup is ready. Start it by double-clicking FileBot.bat (or run .\scripts\start.ps1)."

@@ -15,6 +15,7 @@ from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
 from demo_support import apply_demo, demo_requested
 from filebot_version import __version__
+from service_factory import apply_auto_roots
 from resources import app_root, user_config_dir, user_settings_path
 from storage.db import Database
 from ui.avatar_bubble import AvatarBubble
@@ -50,8 +51,11 @@ def main() -> int:
     root = app_root()
     _ensure_user_settings_template()
     settings = load_settings(root / "config" / "settings.yaml", user_settings_path())
+    dropped_roots: list[str] = []
     if demo_requested():
         apply_demo(settings, root)
+    else:
+        dropped_roots = apply_auto_roots(settings)
     db_path = expand_config_path(settings["app"]["database_path"])
     log_dir = db_path.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -64,6 +68,9 @@ def main() -> int:
         level=getattr(logging, str(settings["app"].get("log_level", "INFO")).upper(), logging.INFO),
         handlers=handlers, force=True,
     )
+    if dropped_roots:
+        logging.getLogger(__name__).warning("Ignoring index roots that do not exist: %s", ", ".join(dropped_roots))
+    logging.getLogger(__name__).info("Indexing roots: %s", ", ".join(settings["index"]["roots"]))
     app = QApplication(sys.argv)
     app.setApplicationName("FileBot")
     app.setApplicationDisplayName("FileBot")
@@ -94,6 +101,8 @@ def main() -> int:
             lambda message: QMessageBox.warning(avatar, "FileBot could not wake", message)
         )
         bridge.activated.connect(lifecycle.toggle)
+        lifecycle.quit_requested.connect(app.quit)
+        avatar.quit_requested.connect(app.quit)
         try:
             bridge.start()
             watcher.start()

@@ -15,7 +15,7 @@ RUNTIME_MODULES = ("fastembed", "chromadb", "onnxruntime", "fitz", "docx", "watc
                    "pynput.keyboard", "PyQt6.QtWidgets",
                    # First-party modules imported lazily at wake time: proves the freeze kept them.
                    "agent.bot_runtime", "retrieval.hybrid_engine", "retrieval.index_worker",
-                   "retrieval.parsers", "retrieval.lexical_engine", "agent.demo_llm", "demo_support",
+                   "retrieval.parsers", "retrieval.lexical_engine", "agent.demo_llm", "demo_support", "service_factory",
                    "executor.cmd_runner", "ui.popover_card", "ui.result_delegate", "ui.theme")
 
 

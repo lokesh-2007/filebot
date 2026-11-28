@@ -1,9 +1,25 @@
-# FileBot 1.0.0-rc2
+# FileBot 1.0.0-rc4
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, and the bundled local LLM engine (llama.cpp's `llama-server`) are loaded after wake and released on idle timeout.
 
 See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
 See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.
+
+## Quick start (Windows, no models needed)
+
+1. Double-click **Setup.bat** once (creates `.venv`, installs packages; needs internet). No PowerShell policy changes required.
+2. Double-click **FileBot.bat**, then press **Ctrl+Alt+Space** or click the avatar.
+3. FileBot indexes your own folders (`index.roots` in `config/settings.yaml`, default `~/Documents`; on OneDrive-redirected PCs `%OneDrive%\Documents` is added automatically; roots that do not exist are ignored).
+
+### Run modes (`runtime.mode`, or `--mode=...`, or `FILEBOT_MODE`)
+
+| Mode | Search | Ask | When |
+|---|---|---|---|
+| `auto` (default) | semantic + keyword if `models/bge-small-en-v1.5-onnx` exists, else keyword (FTS5) | local LLM if `bin/llama-server.exe` and the GGUF exist, else answers quoted from your files | works out of the box, upgrades itself when files are added |
+| `lite` | keyword only | quoted from your files | never loads a model |
+| `full` | semantic + keyword | local LLM | a missing piece is an error |
+
+The popover header shows which mode is active. Nothing is downloaded implicitly. Run `python scripts/fetch_models.py` for semantic search and see "Local model" for the LLM. Adding the embedding model later re-embeds your files once in the background.
 
 ## Demo mode (no models needed)
 

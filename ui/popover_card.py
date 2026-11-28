@@ -61,6 +61,10 @@ class PopoverCard(QWidget):
     work_started = pyqtSignal()
     work_finished = pyqtSignal()
     status_changed = pyqtSignal(str)
+    minimize_requested = pyqtSignal()
+    close_requested = pyqtSignal()
+    quit_requested = pyqtSignal()
+
     def __init__(self, engine: Any, runtime: Any, db: Database) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.engine, self.runtime, self.db = engine, runtime, db
@@ -86,7 +90,8 @@ class PopoverCard(QWidget):
         heading.setSpacing(0)
         title = QLabel("FileBot")
         title.setObjectName("title")
-        subtitle = QLabel("Local file search · runs offline")
+        mode_label = getattr(getattr(runtime, "capabilities", None), "label", None)
+        subtitle = QLabel(mode_label if isinstance(mode_label, str) else "Local file search · runs offline")
         subtitle.setObjectName("subtitle")
         heading.addWidget(title)
         heading.addWidget(subtitle)
@@ -95,6 +100,17 @@ class PopoverCard(QWidget):
         self.status_pill = QLabel()
         self.status_pill.setObjectName("pill")
         header.addWidget(self.status_pill, 0, Qt.AlignmentFlag.AlignTop)
+        self.minimize_button = self._window_button(
+            "–", "Minimise", "Minimise: hide the panel but keep FileBot ready (click the avatar to reopen)",
+            self.minimize_requested)
+        self.close_button = self._window_button(
+            "×", "Close", "Close: hide the panel and free memory (the avatar stays on screen)",
+            self.close_requested)
+        self.quit_button = self._window_button(
+            "Quit", "End task", "End task: quit FileBot completely, including the background AI engine",
+            self.quit_requested, name="winquit")
+        for button in (self.minimize_button, self.close_button, self.quit_button):
+            header.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
         self._set_pill("active")
 
@@ -157,6 +173,22 @@ class PopoverCard(QWidget):
         self._refresh_pending()
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
+
+    def _window_button(self, text: str, accessible: str, tip: str, signal: Any, name: str = "winbtn") -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName(name)
+        button.setToolTip(tip)
+        button.setAccessibleName(accessible)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.clicked.connect(lambda _checked=False: signal.emit())
+        return button
+
+    def keyPressEvent(self, event: Any) -> None:  # noqa: N802 (Qt API)
+        if event.key() == Qt.Key.Key_Escape:
+            self.minimize_requested.emit()
+            return
+        super().keyPressEvent(event)
 
     def _set_pill(self, state: str) -> None:
         label, color = STATUS_PILLS.get(state, STATUS_PILLS["active"])

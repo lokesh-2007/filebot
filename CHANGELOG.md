@@ -3,6 +3,17 @@
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
+## 1.0.0-rc4 (window controls)
+- Popover header now has **–** Minimise (hide the panel, stay ready; avatar click or Ctrl+Alt+Space reopens it, state kept until the idle timeout), **×** Close (hide and unload models, avatar stays) and **Quit** End task (quits the whole process: watcher, hotkey and `llama-server`). Esc minimises.
+- Right-click the avatar for "Open / close FileBot" and "Quit FileBot (end task)", so FileBot can be ended even if the panel will not open.
+- `LifecycleManager.minimize/request_quit`, `quit_requested` signals wired to `QApplication.quit` in `app.pyw`; `tests/test_window_controls.py` (7 tests).
+
+## 1.0.0-rc3 (working build on your own files)
+- Auto mode (`service_factory.py`, `runtime.mode: auto|lite|full`): real folders are indexed without any model; semantic search and the local LLM switch on automatically when their files are present, and fall back to keyword search/quoted answers if they fail to start. Popover header shows the active mode.
+- Default roots: missing roots are ignored; `%OneDrive%\Documents` is added when the default `~/Documents` is used.
+- `Setup.bat`, `FileBot.bat`, `FileBot-Console.bat` launch without PowerShell execution-policy errors. `setup.ps1` no longer dies when `py -3.11` is not installed (Windows PowerShell 5.1 stderr bug) and tries 3.12 first.
+- `--demo` is unchanged (sandboxed sample files).
+
 ## 1.0.0-rc2 (demo front end)
 - New popover design (`ui/theme.py`, `ui/result_delegate.py`): status pill, result cards with file-type badges and highlighted matches, approval card, trust chips; animated avatar with state ring.
 - Demo mode (`--demo`, `demo_support.py`): sample corpus, `LexicalEngine` (FTS5 only), `DemoServer` stand-in for `llama-server` (extractive answers, `dir`/`whoami`/`ipconfig` proposals through the real approval flow).

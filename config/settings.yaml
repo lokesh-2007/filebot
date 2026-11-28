@@ -7,6 +7,7 @@ app:
 index:
   roots:
     - "~/Documents"
+    - "C:\\"
   # Set true to also index every fixed local drive (Windows). Off by default.
   scan_fixed_drives: false
   include_extensions:
@@ -82,5 +83,8 @@ models:
     path: "~/.filebot/chromadb"
 
 runtime:
+  # auto: use semantic search / the local LLM when their files are present, otherwise keyword
+  # search + answers quoted from your files. lite: never use models. full: require both.
+  mode: auto
   idle_unload_seconds: 120
   hotkey: "<ctrl>+<alt>+<space>"
