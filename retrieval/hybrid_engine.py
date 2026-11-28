@@ -14,6 +14,7 @@ from storage.db import Database
 
 log = logging.getLogger(__name__)
 _DEFAULT_MAX_BM25_CHUNKS = 10_000
+_DEFAULT_MAX_COSINE_DISTANCE = 0.4
 
 
 class HybridEngine:
@@ -197,13 +198,34 @@ class HybridEngine:
             try:
                 vector = list(self._embedder.query_embed(query))[0].tolist()
                 result = self._collection.query(
-                    query_embeddings=[vector], n_results=take, include=["documents", "metadatas"],
+                    query_embeddings=[vector], n_results=take,
+                    include=["documents", "metadatas", "distances"],
                 )
-                ids = (result.get("ids") or [[]])[0]
+                candidate_ids = (result.get("ids") or [[]])[0]
                 documents = (result.get("documents") or [[]])[0]
                 metadatas = (result.get("metadatas") or [[]])[0]
-                dense = [str(chunk_id) for chunk_id in ids]
-                for index, chunk_id in enumerate(dense):
+                distances = (result.get("distances") or [[]])[0]
+                try:
+                    maximum_distance = float(self.settings.get("retrieval", {}).get(
+                        "max_vector_distance", _DEFAULT_MAX_COSINE_DISTANCE,
+                    ))
+                    if not math.isfinite(maximum_distance):
+                        raise ValueError("max_vector_distance must be finite")
+                except (TypeError, ValueError):
+                    log.warning("Invalid retrieval.max_vector_distance; using %.2f",
+                                _DEFAULT_MAX_COSINE_DISTANCE)
+                    maximum_distance = _DEFAULT_MAX_COSINE_DISTANCE
+                maximum_distance = min(2.0, max(0.0, maximum_distance))
+                for index, chunk_id in enumerate(candidate_ids):
+                    if index >= len(distances):
+                        continue
+                    try:
+                        distance = float(distances[index])
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(distance) or distance > maximum_distance:
+                        continue
+                    dense.append(str(chunk_id))
                     metadata = metadatas[index] if index < len(metadatas) else {}
                     document = documents[index] if index < len(documents) else ""
                     metadata = metadata if isinstance(metadata, dict) else {}

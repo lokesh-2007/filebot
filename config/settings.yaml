@@ -60,6 +60,9 @@ index:
 # Optional search shorthand. For example, map "spec" to "product specification".
 retrieval:
   glossary: {}
+  # Chroma cosine distances above this value are treated as weak matches and
+  # excluded from chat context; lexical filename/text matches remain available.
+  max_vector_distance: 0.4
   # BM25 is held in memory; larger corpora use SQLite lexical fallback + vectors.
   max_in_memory_chunks: 10000
 

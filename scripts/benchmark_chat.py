@@ -242,6 +242,11 @@ def main() -> int:
     settings["models"]["ollama"]["api_base"] = f"{base_url}/v1"
     model_name = str(settings["models"]["ollama"]["model"])
     model_quantization = _model_quantization(base_url, model_name)
+    tokenizer_cache = (
+        expand_config_path(settings["app"]["database_path"]).parent
+        / "nanobot" / "cache" / "tiktoken"
+    )
+    os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(tokenizer_cache))
 
     with tempfile.TemporaryDirectory(prefix="filebot-product-benchmark-") as directory:
         sandbox = Path(directory)
@@ -264,6 +269,9 @@ def main() -> int:
             "hardware": {"machine": platform.machine(), "processor": platform.processor()},
             "corpus": {"files": len(files), "file_size_kb": args.index_file_kb,
                        "synthetic_only": True},
+            "prompt_tokenizer_cache_available": bool(
+                tokenizer_cache.is_dir() and any(tokenizer_cache.iterdir())
+            ),
             "saved_prompt_or_response": False,
         }
         try:

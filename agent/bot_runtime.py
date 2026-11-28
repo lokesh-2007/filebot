@@ -117,6 +117,20 @@ def _disable_nanobot_skills(context: Any) -> int:
     return len(names)
 
 
+def _warm_prompt_tokenizer(timeout_seconds: float = 3.0) -> bool:
+    """Load Nanobot's prompt tokenizer before the first turn is budget-checked."""
+    try:
+        from nanobot.utils.token_encoding import get_token_encoding, warmup_token_encoding
+        warmup_token_encoding()
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while get_token_encoding() is None and time.monotonic() < deadline:
+            time.sleep(0.025)
+        return get_token_encoding() is not None
+    except Exception:
+        log.warning("Could not load the local prompt tokenizer; context checks may use byte estimates", exc_info=True)
+        return False
+
+
 class BotRuntime:
     """Own Nanobot only while awake; direct command intent always becomes a proposal."""
     def __init__(self, settings: dict[str, Any], db: Database, engine: Any) -> None:
@@ -252,6 +266,12 @@ class BotRuntime:
         nanobot_config.parent.mkdir(parents=True, exist_ok=True)
         config.bind_source_path(nanobot_config)
         set_config_path(nanobot_config)
+        tokenizer_cache = nanobot_config.parent / "cache" / "tiktoken"
+        os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(tokenizer_cache))
+        if not _warm_prompt_tokenizer():
+            log.warning(
+                "Prompt tokenizer is not ready; run FileBot setup with internet access to cache it"
+            )
         registry = ToolRegistry()
         search = SearchFilesTool(self.engine)
         file_ops = FileOpsTool(self.db, roots=settings["index"]["roots"])
@@ -733,6 +753,26 @@ class BotRuntime:
         except (OSError, RuntimeError, ValueError, PermissionError) as exc:
             return f"I couldn't open that configured folder: {exc}"
 
+    def _create_explicit_file(self, prompt: str) -> str | None:
+        """Create a named empty/user-filled file directly; use the model only to author text."""
+        target = self.router.create_target(prompt)
+        if target is None:
+            return (
+                "Tell me the exact filename and extension, such as `notes.txt`. "
+                "I create new text files inside your configured folders and never overwrite files."
+            )
+        content = self.router.create_content(prompt)
+        if content is None and self.router.create_needs_generated_content(prompt):
+            return None
+        file_ops = FileOpsTool(self.db, roots=self.settings.get("index", {}).get("roots"))
+        try:
+            path = file_ops.create_file(target, content or "")
+            if content is None:
+                return f"Created an empty file: {path}"
+            return f"Created file: {path}"
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return f"I couldn't create that file: {exc}"
+
     def _stage_explicit_delete(self, prompt: str) -> str:
         """Stage one unambiguous exact file for a one-time confirmation token."""
         target = self.router.delete_target(prompt)
@@ -849,6 +889,10 @@ class BotRuntime:
             return self.search(prompt)
         if intent == "open_folder":
             return self._open_explicit_folder(prompt)
+        if intent == "create":
+            result = self._create_explicit_file(prompt)
+            if result is not None:
+                return result
         summary_content: str | None = None
         if intent == "open":
             result = self._open_explicit_target(prompt)
@@ -895,6 +939,10 @@ class BotRuntime:
             return self.search(prompt)
         if intent == "open_folder":
             return self._open_explicit_folder(prompt)
+        if intent == "create":
+            result = self._create_explicit_file(prompt)
+            if result is not None:
+                return result
         summary_content: str | None = None
         if intent == "open":
             result = self._open_explicit_target(prompt)

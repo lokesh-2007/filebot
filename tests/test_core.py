@@ -166,6 +166,20 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(results[0]["file_name"], "budget-plan.md")
         self.assertIn("background.txt", {row["file_name"] for row in results})
 
+    def test_lexical_fallback_ignores_common_question_words(self) -> None:
+        for name, content in (
+            ("benchmark-a.txt", "Synthetic FileBot benchmark corpus."),
+            ("benchmark-b.txt", "Synthetic document with neutral text."),
+        ):
+            self.db.replace_file(
+                self.root / name, content_hash=name, size=len(content), mtime=1.0,
+                chunks=[{"text": content}],
+            )
+
+        self.assertEqual(
+            self.db.search_lexical("Reply with the single word READY."), [],
+        )
+
     def test_lexical_fallback_treats_sql_wildcards_as_literal_query_text(self) -> None:
         special = self.root / "report_100%.txt"
         ordinary = self.root / "ordinary.txt"
@@ -906,10 +920,43 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(router.delete_target('Delete "brief.txt"'), "brief.txt")
         self.assertEqual(router.route("How do I create a file?"), "chat")
         self.assertEqual(router.route("How do I delete a file?"), "chat")
+        self.assertEqual(router.route("create a text file named h2.txt"), "create")
+        self.assertEqual(router.create_target("create a text file named h2.txt"), "h2.txt")
+        self.assertEqual(router.route("open downloads"), "open_folder")
         self.assertEqual(router.route("CONFIRM DELETE A1B2C3D4"), "confirm_delete")
         self.assertEqual(router.route("CANCEL DELETE A1B2C3D4"), "cancel_delete")
         self.assertEqual(router.open_target("show me C:\\Docs\\Lab3.pdf"), "C:\\Docs\\Lab3.pdf")
         self.assertIsNone(router.open_target("Open the PDF document"))
+
+    def test_named_empty_file_creation_bypasses_ollama_in_both_chat_paths(self) -> None:
+        allowed = self.root / "allowed"
+        allowed.mkdir()
+        runtime = BotRuntime({"index": {"roots": [str(allowed)]}}, self.db, object())
+
+        with patch.object(runtime, "_prepare_prompt", side_effect=AssertionError("must not call model")):
+            answer = runtime.ask("create a text file named h2.txt")
+            streamed = runtime.ask_streaming("create a text file named h3.txt", lambda _delta: None)
+
+        self.assertEqual(answer, f"Created an empty file: {allowed / 'h2.txt'}")
+        self.assertEqual(streamed, f"Created an empty file: {allowed / 'h3.txt'}")
+        self.assertEqual((allowed / "h2.txt").read_text(encoding="utf-8"), "")
+        self.assertEqual((allowed / "h3.txt").read_text(encoding="utf-8"), "")
+
+    def test_open_natural_folder_names_directly_inside_configured_roots(self) -> None:
+        documents = self.root / "Documents"
+        chatgpt = documents / "ChatGPT"
+        downloads = self.root / "Downloads"
+        chatgpt.mkdir(parents=True)
+        downloads.mkdir()
+        runtime = BotRuntime({"index": {"roots": [str(documents), str(downloads)]}}, self.db, object())
+
+        with patch("agent.tools.file_ops_tool.os.startfile") as startfile:
+            opened_chatgpt = runtime.ask("open chat gpt folder")
+            opened_downloads = runtime.ask("open downloads")
+
+        self.assertEqual(opened_chatgpt, f"Opened folder: {chatgpt.resolve()}")
+        self.assertEqual(opened_downloads, f"Opened folder: {downloads.resolve()}")
+        self.assertEqual(startfile.call_args_list, [call(str(chatgpt.resolve())), call(str(downloads.resolve()))])
 
     def test_explicit_search_action_uses_index_without_ollama_or_model(self) -> None:
         matches = [{"path": "C:/docs/notes.txt", "snippet": "meeting notes"}]

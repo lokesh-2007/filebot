@@ -17,6 +17,9 @@ _CREATABLE_TEXT_EXTENSIONS = {
     ".rb", ".php", ".rs", ".html", ".css", ".xml", ".sql",
 }
 _MAX_CREATE_BYTES = 256_000
+_FOLDER_SEARCH_DEPTH = 3
+_FOLDER_SEARCH_LIMIT = 2_000
+_FOLDER_SEARCH_SKIP = frozenset({".git", ".venv", "appdata", "node_modules", "windows"})
 
 
 class _SHFILEOPSTRUCTW(ctypes.Structure):
@@ -62,6 +65,98 @@ class FileOpsTool:
         if not path_is_within_roots(parent, self.roots):
             raise PermissionError("File path is outside FileBot's configured roots")
         return parent / requested.name
+
+    @staticmethod
+    def _folder_key(name: str) -> str:
+        """Normalize spacing and punctuation for a user's natural folder name."""
+        return "".join(character.casefold() for character in name if character.isalnum())
+
+    def _resolve_configured_folder(self, requested: str) -> Path:
+        """Resolve exact paths first, then a bounded unambiguous name under configured roots."""
+        if self.roots is None or not self.roots:
+            raise PermissionError("Folder access requires configured FileBot roots")
+        candidate = Path(requested).expanduser()
+        if candidate.is_absolute():
+            folder = candidate.resolve(strict=True)
+            if not folder.is_dir():
+                raise ValueError("The selected path is not a folder")
+            if not path_is_within_roots(folder, self.roots):
+                raise PermissionError("Folder is outside FileBot's configured roots")
+            return folder
+
+        exact: dict[str, Path] = {}
+        for root in self.roots:
+            try:
+                resolved_root = root.resolve(strict=True)
+                if not resolved_root.is_dir():
+                    continue
+                if candidate.parts and len(candidate.parts) == 1 and (
+                    resolved_root.name.casefold() == requested.casefold()
+                ):
+                    exact[str(resolved_root).casefold()] = resolved_root
+                possible = (resolved_root / candidate).resolve(strict=True)
+                if possible.is_dir() and path_is_within_roots(possible, self.roots):
+                    exact[str(possible).casefold()] = possible
+            except (OSError, RuntimeError):
+                continue
+        if len(exact) == 1:
+            return next(iter(exact.values()))
+        if len(exact) > 1:
+            options = "\n".join(
+                f"- {path}" for path in sorted(exact.values(), key=lambda item: str(item).casefold())[:10]
+            )
+            raise ValueError(f"More than one configured folder matches '{requested}':\n{options}")
+        if len(candidate.parts) != 1:
+            raise FileNotFoundError(f"No configured folder matches '{requested}'")
+
+        query_key = self._folder_key(requested)
+        if not query_key:
+            raise FileNotFoundError(f"No configured folder matches '{requested}'")
+        matches: dict[str, Path] = {}
+        queue: list[tuple[Path, int]] = []
+        for root in self.roots:
+            try:
+                resolved_root = root.resolve(strict=True)
+                if resolved_root.is_dir() and path_is_within_roots(resolved_root, self.roots):
+                    queue.append((resolved_root, 0))
+            except (OSError, RuntimeError):
+                continue
+
+        visited = 0
+        position = 0
+        while position < len(queue) and visited < _FOLDER_SEARCH_LIMIT:
+            folder, depth = queue[position]
+            position += 1
+            visited += 1
+            if self._folder_key(folder.name) == query_key:
+                matches[str(folder).casefold()] = folder
+            if depth >= _FOLDER_SEARCH_DEPTH:
+                continue
+            try:
+                with os.scandir(folder) as entries:
+                    children = sorted(entries, key=lambda entry: entry.name.casefold())
+                for entry in children:
+                    if entry.name.casefold() in _FOLDER_SEARCH_SKIP:
+                        continue
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                        child = Path(entry.path).resolve(strict=True)
+                        if (child.is_dir() and path_is_within_roots(child, self.roots)):
+                            queue.append((child, depth + 1))
+                    except (OSError, RuntimeError):
+                        continue
+            except OSError:
+                continue
+
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        if len(matches) > 1:
+            options = "\n".join(
+                f"- {path}" for path in sorted(matches.values(), key=lambda item: str(item).casefold())[:10]
+            )
+            raise ValueError(f"More than one configured folder matches '{requested}':\n{options}")
+        raise FileNotFoundError(f"No configured folder matches '{requested}'")
 
     def create_file(self, path: str, content: str) -> str:
         """Create a new, bounded UTF-8 text file without overwriting anything."""
@@ -182,26 +277,7 @@ class FileOpsTool:
         if not requested:
             folder = self.roots[0].resolve(strict=True)
         else:
-            candidate = Path(requested).expanduser()
-            if candidate.is_absolute():
-                folder = candidate.resolve(strict=True)
-            else:
-                root_match = next(
-                    (root for root in self.roots if root.name.casefold() == requested.casefold()),
-                    None,
-                )
-                folder = root_match.resolve(strict=True) if root_match else None
-                if folder is None:
-                    for root in self.roots:
-                        possible = (root / candidate)
-                        try:
-                            if possible.is_dir():
-                                folder = possible.resolve(strict=True)
-                                break
-                        except (OSError, RuntimeError):
-                            continue
-                if folder is None:
-                    raise FileNotFoundError(f"No configured folder matches '{requested}'")
+            folder = self._resolve_configured_folder(requested)
         if not folder.is_dir():
             raise ValueError("The selected path is not a folder")
         if not path_is_within_roots(folder, self.roots):
@@ -247,35 +323,10 @@ class FileOpsTool:
 
     def open_directory(self, path: str) -> str:
         """Open a named or absolute folder only when it is inside configured roots."""
-        if self.roots is None or not self.roots:
-            raise PermissionError("Folder opening requires configured FileBot roots")
         requested = path.strip().strip('"').strip("'")
         if not requested or "\x00" in requested:
             raise ValueError("Provide a valid folder path")
-        candidate = Path(requested).expanduser()
-        folder: Path | None = None
-        if candidate.is_absolute():
-            folder = candidate.resolve(strict=True)
-        else:
-            root_match = next(
-                (root for root in self.roots if root.name.casefold() == requested.casefold()),
-                None,
-            )
-            if root_match is not None:
-                folder = root_match.resolve(strict=True)
-            else:
-                for root in self.roots:
-                    try:
-                        possible = (root / candidate).resolve(strict=True)
-                        if possible.is_dir():
-                            folder = possible
-                            break
-                    except (OSError, RuntimeError):
-                        continue
-        if folder is None or not folder.is_dir():
-            raise FileNotFoundError(f"No configured folder matches '{requested}'")
-        if not path_is_within_roots(folder, self.roots):
-            raise PermissionError("Folder is outside FileBot's configured roots")
+        folder = self._resolve_configured_folder(requested)
         if os.name != "nt":
             raise OSError("Opening a folder in Explorer is available only on Windows")
         os.startfile(str(folder))  # type: ignore[attr-defined]

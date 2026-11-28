@@ -13,6 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Literal
 
+_LEXICAL_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "how", "i", "in", "into", "is", "it", "me", "my", "of", "on", "or",
+    "the", "their", "this", "to", "was", "were", "what", "when", "where",
+    "which", "who", "why", "with", "you", "your",
+})
+
 
 DirtyOperation = Literal["upsert", "delete"]
 
@@ -531,7 +538,10 @@ class Database:
     def search_lexical(self, query: str, limit: int = 20) -> list[sqlite3.Row]:
         """Fallback lexical search, ranking filename hits ahead of body-only hits."""
         normalized = query.strip()
-        terms = [self._like_pattern(term) for term in normalized.split() if term]
+        terms = [
+            self._like_pattern(term) for term in normalized.split()
+            if term and term.casefold().strip(".,!?;:") not in _LEXICAL_STOP_WORDS
+        ]
         if not terms:
             return []
         clause = " OR ".join("c.snippet LIKE ? ESCAPE '\\'" for _ in terms)

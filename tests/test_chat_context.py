@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent.bot_runtime import BotRuntime
+from agent.bot_runtime import BotRuntime, _warm_prompt_tokenizer
 from agent.fast_router import FastRouter
 from agent.tools.search_tool import SearchFilesTool
 from storage.db import Database
@@ -17,6 +17,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChatContextTests(unittest.TestCase):
+    def test_prompt_tokenizer_warmup_waits_for_the_background_load(self) -> None:
+        calls = {"encoding": 0, "warmup": 0}
+        encoding = object()
+
+        def get_encoding():
+            calls["encoding"] += 1
+            return encoding if calls["encoding"] >= 2 else None
+
+        module = SimpleNamespace(
+            get_token_encoding=get_encoding,
+            warmup_token_encoding=lambda: calls.__setitem__("warmup", calls["warmup"] + 1),
+        )
+        with patch.dict("sys.modules", {"nanobot.utils.token_encoding": module}):
+            self.assertTrue(_warm_prompt_tokenizer(timeout_seconds=0.5))
+
+        self.assertEqual(calls["warmup"], 1)
+        self.assertGreaterEqual(calls["encoding"], 2)
+
+    def test_prompt_tokenizer_warmup_fails_fast_if_encoding_is_unavailable(self) -> None:
+        module = SimpleNamespace(
+            get_token_encoding=lambda: None,
+            warmup_token_encoding=lambda: None,
+        )
+        with patch.dict("sys.modules", {"nanobot.utils.token_encoding": module}):
+            self.assertFalse(_warm_prompt_tokenizer(timeout_seconds=0))
+
     def test_command_routing_does_not_capture_normal_conversation(self) -> None:
         router = FastRouter()
 
@@ -34,6 +60,10 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertEqual(router.route("open downloads folder"), "open_folder")
         self.assertEqual(router.folder_target("open downloads folder"), "downloads")
+        self.assertEqual(router.route("open downloads"), "open_folder")
+        self.assertEqual(router.folder_target("open downloads"), "downloads")
+        self.assertEqual(router.route("open chat gpt folder"), "open_folder")
+        self.assertEqual(router.folder_target("open chat gpt folder"), "chat gpt")
         self.assertEqual(
             router.route("open the chatgpt folder inside onedrive"), "open_folder",
         )
@@ -43,6 +73,23 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(router.route("How do I open the Downloads folder?"), "chat")
         self.assertEqual(router.route("What's in the Downloads folder?"), "list")
         self.assertEqual(router.list_target("What's in the Downloads folder?"), "Downloads")
+
+    def test_create_request_extracts_named_target_and_explicit_content(self) -> None:
+        router = FastRouter()
+
+        self.assertEqual(router.route("create a text file named h2.txt"), "create")
+        self.assertEqual(router.create_target("create a text file named h2.txt"), "h2.txt")
+        self.assertIsNone(router.create_content("create a text file named h2.txt"))
+        self.assertFalse(router.create_needs_generated_content("create a text file named h2.txt"))
+        self.assertEqual(
+            router.create_content('create a file named notes.txt containing: "first line"'),
+            "first line",
+        )
+        self.assertTrue(
+            router.create_needs_generated_content(
+                "create a file named plan.txt with a brief project plan about backups"
+            )
+        )
 
     def test_context_overflow_retries_once_in_a_fresh_session(self) -> None:
         runtime = BotRuntime({}, object(), object())

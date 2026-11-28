@@ -33,6 +33,31 @@ class FastRouter:
         r"[\w ._-]+\.(?:txt|md|csv|json|ya?ml|py|js|ts|rs|html)\b",
         re.I,
     )
+    _named_create_target = re.compile(
+        r"\b(?:named|called)\s+[\"'`]?"
+        r"([^\"'`<>|?*\r\n]+?\.[a-z0-9]{1,10})"
+        r"(?=[\"'`]?(?:$|\s|[,!?]))",
+        re.I,
+    )
+    _bare_create_target = re.compile(
+        r"^\s*(?:please\s+)?(?:create|make|write|save)\s+"
+        r"(?:(?:a|an|new|text|file)\s+){0,4}[\"'`]?"
+        r"([^\"'`<>|?*\r\n]+?\.[a-z0-9]{1,10})"
+        r"(?=[\"'`]?(?:$|\s|[,!?]))",
+        re.I,
+    )
+    _create_content = re.compile(
+        r"\b(?:with\s+(?:the\s+)?(?:content|contents|text|following)"
+        r"|containing|include(?:\s+the\s+following)?(?:\s+text|\s+content)?)"
+        r"\s*[:=]?\s*(.*)$",
+        re.I | re.S,
+    )
+    _generated_file_content = re.compile(
+        r"\b(?:about|including|include|containing|draft|outline|summary|"
+        r"with\s+(?:a\s+|an\s+|the\s+|some\s+)?"
+        r"(?:short\s+|brief\s+)?(?:plan|report|summary|outline|draft|content|text|notes?))\b",
+        re.I,
+    )
     _action_question = re.compile(
         r"^\s*(?:how|why|when|what|should\s+i|can\s+i)\b.*"
         r"\b(?:delete|remove|trash|create|make|write|save|open|browse)\b",
@@ -46,6 +71,12 @@ class FastRouter:
     _open_folder = re.compile(
         r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\b"
         r".{0,100}\b(?:folder|directory)\b",
+        re.I,
+    )
+    _open_named_root = re.compile(
+        r"^\s*(?:please\s+)?(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+        r"(?:(?:me|the|my)\s+)*(?:documents|downloads|desktop|onedrive)"
+        r"(?:\s+(?:folder|directory))?\s*[?.!]*$",
         re.I,
     )
     _read_file = re.compile(
@@ -113,6 +144,13 @@ class FastRouter:
 
     def folder_target(self, prompt: str) -> str | None:
         """Extract an explicit folder name/path from a direct open-folder request."""
+        root = self._open_named_root.search(prompt.strip())
+        if root is not None:
+            return re.sub(
+                r"^\s*(?:please\s+)?(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
+                r"(?:(?:me|the|my)\s+)*|\s+(?:folder|directory)\s*[?.!]*$",
+                "", prompt.strip(), flags=re.I,
+            ).strip()
         inside = re.search(
             r"\b(?:open|show|view|browse|go\s+to|navigate\s+to)\s+"
             r"(?:(?:me|the|my)\s+)*(?P<path>.+?)\s+(?:folder|directory)\s+"
@@ -134,6 +172,32 @@ class FastRouter:
         target = re.sub(r"^(?:the|my)\s+", "", target, flags=re.I)
         return target or None
 
+    def create_target(self, prompt: str) -> str | None:
+        """Extract one explicit new-file path from a natural-language request."""
+        text = prompt.strip()
+        match = self._named_create_target.search(text) or self._bare_create_target.search(text)
+        if match is None:
+            return None
+        target = match.group(1).strip().strip("`\"").rstrip(".,;!? ")
+        return target or None
+
+    def create_content(self, prompt: str) -> str | None:
+        """Return content the user explicitly supplied, without asking a model to invent it."""
+        match = self._create_content.search(prompt.strip())
+        if match is None:
+            return None
+        content = match.group(1).lstrip(" \t\r\n")
+        if len(content) >= 2 and content[0] == content[-1] and content[0] in "\"'`":
+            content = content[1:-1]
+        return content
+
+    def create_needs_generated_content(self, prompt: str) -> bool:
+        """Keep requests asking FileBot to author text on the model-backed create tool."""
+        text = prompt.strip()
+        target = self._named_create_target.search(text) or self._bare_create_target.search(text)
+        suffix = text[target.end():] if target is not None else text
+        return bool(self._generated_file_content.search(suffix))
+
     def is_summary_request(self, prompt: str) -> bool:
         """Keep summary requests model-backed even when the named file is local."""
         return bool(self._summary_request.search(prompt))
@@ -152,7 +216,8 @@ class FastRouter:
             return "delete"
         if self._create_file.search(prompt) and not self._action_question.search(prompt):
             return "create"
-        if self._open_folder.search(prompt) and not self._action_question.search(prompt):
+        if ((self._open_folder.search(prompt) or self._open_named_root.search(prompt))
+                and not self._action_question.search(prompt)):
             return "open_folder"
         if self._search.search(prompt):
             return "search"

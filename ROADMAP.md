@@ -19,9 +19,16 @@ still being validated.
 - Successful local Ollama/model readiness checks are cached for 90 seconds, so
   quick follow-up turns skip the `/api/tags` HTTP probe; inference errors
   invalidate the cache. First-token wait feedback appears every three seconds,
-  and model prompts ask for natural, concise, result-first replies. This reduces
-  preflight and perceived wait overhead; no new hardware inference benchmark was
-  run, so token-generation latency is not claimed to have improved.
+  and model prompts ask for natural, concise, result-first replies. A live
+  2026-11-28 benchmark completed two turns but measured 60.72 s cold and 63.59 s
+  warm to first text on CPU-only `qwen2.5-coder:3b`; chat responsiveness is still
+  below product expectations and needs hardware/model tuning.
+- Setup now prefetches Nanobot's `cl100k_base` tokenizer into FileBot's data
+  directory; runtime waits up to three seconds for tokenizer initialization
+  before accepting a turn. This fixes first-turn context checks falling back to
+  UTF-8 byte counts and rejecting ordinary prompts. Regression tests cover
+  successful and unavailable tokenizer startup. If setup cannot download the
+  tokenizer, the fallback remains conservative and may still reject prompts.
 - Retrieval and Nanobot initialize on wake; Ollama starts on demand for model
   requests and unloads according to the configured keep-alive/lifecycle policy.
 - FileBot-managed Ollama starts with one loaded model, one parallel request,
@@ -53,7 +60,14 @@ still being validated.
   281.15 ms baseline. This remains a synthetic in-memory fixture, not a
   disk-heavy personal-corpus benchmark or a defined latency SLA. No persistent
   FTS index has been added; larger or slower real corpora still need measurement.
-- Ollama integration was retried on the local Windows host. The standard
+- Vector search now requests Chroma cosine distances and excludes unscored or
+  weak vector hits above configurable `retrieval.max_vector_distance` (default
+  0.4) from fused chat/search results; BM25/SQLite lexical hits remain eligible.
+  A regression fixture verifies unrelated vector results are dropped. A small
+  FastEmbed check measured distance 0.445 for neutral synthetic text versus a
+  single-word chat prompt and 0.248 for a matching warranty question/document;
+  this supports the initial cutoff but is not broad relevance validation.
+- Historical restricted-session Ollama integration showed the standard
   `11434` port is not visible in the current listener list, but Ollama itself
   reports it cannot bind because the address is already in use. Starting the
   managed server on free loopback port `11435` succeeds; FileBot's HTTP probe
@@ -67,12 +81,36 @@ still being validated.
 - `scripts/benchmark_chat.py` now samples FileBot and Ollama private commit and
   working set separately, Ollama loaded-model/VRAM estimates, whole-system RAM,
   wake/index duration, and cold/warm first-token and completion timing over a
-  synthetic corpus without saving prompt or response text. In the current
-  restricted Windows session, 25 synthetic 8 KiB files woke in 6.55 s and
-  indexed in 22.94 s; FileBot peaked at 350.49 MiB working set and 711.53 MiB
-  private commit. Ollama chat failed because Windows denied access to
-  `127.0.0.1:11434` (WinError 10013), so these figures exclude Ollama and do not
-  establish the product's 3.5–4 GB target or live latency.
+  synthetic corpus without saving prompt or response text. Earlier restricted
+  runs used 25 synthetic 8 KiB files, woke in 6.55 s, indexed in 22.94 s, and
+  could not reach Ollama (`WinError 10013`); those startup-only results were
+  superseded by the live benchmark below and did not validate model memory.
+- Live external-Ollama benchmark, 2026-11-28: `qwen2.5-coder:3b`, Q4_K_M,
+  4096 context, 100 synthetic 16 KiB files. Wake 4.22 s; embedding/indexing
+  163.69 s; cold first text 60.72 s / complete 60.82 s; warm first text 63.59 s
+  / complete 63.70 s. FileBot peak working set/private commit was 446.91/804.87
+  MiB; Ollama process peak was 33.46/60.08 MiB; Ollama `/api/ps` model allocation
+  was 2067.92 MiB and VRAM 0 MiB. System RAM total was 14173.37 MiB, with only
+  398.47 MiB available at the lowest sample. The two model turns succeeded, but
+  the 3.5–4 GB target and responsiveness were not accepted: model-allocation
+  estimates are distinct from process counters, unrelated apps consumed RAM,
+  the host was nearly out of available RAM, Ollama was externally owned, and
+  idle unload/reload was not tested. This run occurred before the vector
+  distance filter and supplied irrelevant synthetic excerpts to the prompt.
+- A second live run with 10 synthetic 1 KiB files woke in 4.63 s and indexed in
+  1.54 s. Cold/warm time to first text was 60.14/56.51 s and total completion
+  was 60.26/56.63 s; preflight was 22 ms then cached, while retrieval took
+  35–47 ms. FileBot peak working set/private commit was 350.07/667.77 MiB;
+  Ollama process peak was 33.41/59.72 MiB; model allocation remained 2067.92
+  MiB with 0 MiB VRAM; system RAM available bottomed at 443.59 MiB. Both turns
+  returned `READY`, but the 2,088-token input still included irrelevant excerpts:
+  Chroma distances were above 0.4, while SQLite matched the stopword “the” in
+  every file. The lexical fallback now removes common English question
+  stopwords. An actual post-fix 2-file indexed synthetic check returns zero
+  results for “Reply with the single word READY.” The final retrieval changes
+  have unit tests and this local relevance check, but no new live-model run.
+  Chat remains far too slow on this CPU-only host; model-speed tuning and a
+  broader Windows hardware matrix remain release blockers.
 - Background queue indexing runs in Windows background CPU and I/O priority,
   with bounded work batches and polling between batches.
 - PDF, DOCX, Markdown, and text parsing feed FastEmbed/ONNX, ChromaDB, and BM25
@@ -99,6 +137,16 @@ still being validated.
 - Chat can list a requested configured folder without model latency; the listing
   enforces root containment, skips links outside allowed roots, and bounds both
   the scan and displayed names.
+- Direct folder open now accepts configured root names without the word “folder”
+  (for example “open downloads”) and uses bounded depth-three name matching
+  inside configured roots for spacing/punctuation variants such as “chat gpt”.
+  Ambiguous normalized names return candidate paths without opening either.
+- A named create request such as “create a text file named h2.txt” now creates
+  an empty file directly, without waiting on Ollama. Explicit user-provided text
+  is written directly; requests to draft/author file contents still use the
+  model tool. Existing root containment, extension, size, and no-overwrite
+  checks apply. Chat, file-operation, and router regression tests cover both
+  screenshots' failures.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

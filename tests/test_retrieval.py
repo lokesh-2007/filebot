@@ -75,10 +75,27 @@ class ReciprocalRankFusionTests(unittest.TestCase):
         engine._collection = SimpleNamespace(query=lambda **_kwargs: {
             "ids": [["dense"]], "documents": [["Semantic match"]],
             "metadatas": [[{"path": "semantic.pdf"}]],
+            "distances": [[0.2]],
         })
 
         results = engine.search("semantic question")
         self.assertEqual({item["path"] for item in results}, {"older.txt", "semantic.pdf"})
+
+    def test_vector_search_drops_semantically_distant_results(self) -> None:
+        class FakeDatabase:
+            def search_lexical(self, _query, _limit):
+                return []
+
+        engine = HybridEngine({}, FakeDatabase())
+        engine._embedder = SimpleNamespace(
+            query_embed=lambda _query: [SimpleNamespace(tolist=lambda: [0.0])],
+        )
+        engine._collection = SimpleNamespace(query=lambda **_kwargs: {
+            "ids": [["irrelevant"]], "documents": [["Unrelated benchmark boilerplate"]],
+            "metadatas": [[{"path": "unrelated.txt"}]], "distances": [[0.45]],
+        })
+
+        self.assertEqual(engine.search("Reply with the single word READY."), [])
 
     def test_shared_high_rank_result_receives_both_votes(self) -> None:
         rows = [
