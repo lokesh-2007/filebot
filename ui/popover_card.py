@@ -137,7 +137,7 @@ class PopoverCard(QWidget):
         self.pending = QVBoxLayout()
         layout.addLayout(self.pending)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Ask FileBot to find, read, create, or manage a file…")
+        self.input.setPlaceholderText("Ask FileBot to find, read, create, or use cmd: <command> for approval…")
         self.input.setAccessibleName("Message FileBot")
         self.input.returnPressed.connect(self.submit)
         self.input.textEdited.connect(lambda _text: self.activity.emit())

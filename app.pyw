@@ -16,6 +16,7 @@ from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
 from filebot_version import __version__
 from storage.db import Database
+from ui.avatar_bubble import AvatarBubble
 from ui.hotkey_bridge import HotkeyBridge
 
 
@@ -64,6 +65,7 @@ def main() -> int:
         lifecycle = LifecycleManager(settings, db, root)
         watcher = FileWatcher(settings, db)
         bridge = HotkeyBridge(settings["runtime"].get("hotkey", "<ctrl>+<alt>+<space>"))
+        avatar = AvatarBubble()
         tray = QSystemTrayIcon(app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), app)
         tray.setToolTip("FileBot — local file assistant")
         tray_menu = QMenu()
@@ -75,8 +77,8 @@ def main() -> int:
         tray.setContextMenu(tray_menu)
 
         def show_chat_window(window: object) -> None:
-            window.show()
-            window.raise_()
+            avatar.show()
+            avatar.show_popover(window)
             window.activateWindow()
 
         def activate_tray(reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -87,6 +89,9 @@ def main() -> int:
                 lifecycle.toggle()
 
         lifecycle.popover_ready.connect(show_chat_window)
+        lifecycle.status_changed.connect(avatar.set_status)
+        avatar.toggled.connect(lifecycle.toggle)
+        avatar.quit_requested.connect(app.quit)
         lifecycle.error_occurred.connect(
             lambda message: QMessageBox.warning(None, "FileBot could not wake", message)
         )
@@ -96,6 +101,7 @@ def main() -> int:
             bridge.start()
             watcher.start()
             tray.show()
+            avatar.show()
             lifecycle.wake()
             working_set = process_working_set_mb()
             if working_set is not None:
@@ -108,6 +114,7 @@ def main() -> int:
         app.aboutToQuit.connect(watcher.stop)
         app.aboutToQuit.connect(bridge.stop)
         app.aboutToQuit.connect(lifecycle.shutdown)
+        app.aboutToQuit.connect(avatar.close)
         app.aboutToQuit.connect(guard.release)
         return app.exec()
     finally:

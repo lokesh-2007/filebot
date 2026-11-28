@@ -113,6 +113,38 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(router.route("How do I run the tests?"), "chat")
         self.assertEqual(router.route("Use PowerShell to list files"), "powershell")
 
+    def test_common_typos_and_cmd_entrypoints_are_recovered(self) -> None:
+        router = FastRouter()
+
+        self.assertEqual(router.route("open cmd prom"), "cmd_help")
+        self.assertEqual(router.route("Open command promt"), "cmd_help")
+        self.assertEqual(router.route("open cmmnd promt"), "cmd_help")
+        self.assertEqual(router.route("open cmd promppt"), "cmd_help")
+        self.assertEqual(router.route("cmd"), "cmd_help")
+        self.assertEqual(router.route("cmd: dir"), "cmd")
+        self.assertEqual(router.command_text("cmd: dir"), "dir")
+        self.assertEqual(router.command_text("cmd: dri"), "dir")
+        self.assertEqual(router.route("cmd /c dir"), "cmd")
+        self.assertEqual(router.command_text("cmd /c dir"), "dir")
+        self.assertEqual(router.route("cmd /c dri"), "cmd")
+        self.assertEqual(router.command_text("cmd /c dri"), "dir")
+        self.assertEqual(router.route("cmd.exe /k tree C:\\Users"), "cmd")
+        self.assertEqual(router.command_text("cmd.exe /k tree C:\\Users"), "tree C:\\Users")
+        self.assertEqual(router.route("dir"), "cmd")
+        self.assertEqual(router.command_text("dir"), "dir")
+        self.assertEqual(router.route("dri"), "cmd")
+        self.assertEqual(router.command_text("dri"), "dir")
+        self.assertEqual(router.route("powershell: Get-Process"), "powershell")
+        self.assertEqual(router.command_text("powershell: Get-Process", shell="powershell"), "Get-Process")
+        self.assertEqual(router.route("use poweshell to list processes"), "powershell")
+        self.assertEqual(router.route("opne downloads"), "open_folder")
+        self.assertEqual(router.folder_target("opne downloads"), "downloads")
+        self.assertEqual(router.route("open ChatGPT foler"), "open_folder")
+        self.assertEqual(router.folder_target("open ChatGPT foler"), "ChatGPT")
+        self.assertEqual(router.route("creat a text file namd h2.txt"), "create")
+        self.assertEqual(router.create_target("creat a text file namd h2.txt"), "h2.txt")
+        self.assertEqual(router.create_target("create a file named opne.txt"), "opne.txt")
+
     def test_context_overflow_retries_once_in_a_fresh_session(self) -> None:
         runtime = BotRuntime({}, object(), object())
         calls: list[str] = []

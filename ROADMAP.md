@@ -154,6 +154,17 @@ still being validated.
   requests still enter their existing explicit approval flow. This tested
   phrase set improves coverage but does not imply understanding every possible
   wording; unmatched phrases remain conversational requests.
+- CMD is reachable from the chat prompt with `cmd: <command>`; “open cmd prompt”
+  displays the syntax, and common bare commands such as `dir` are routed directly.
+  Those requests bypass model latency but only stage an auditable, visible
+  approval card. Unknown single commands are approval-gated; chained commands,
+  shell expansion, destructive terminal deletion, installers, and privileged or
+  disk-management operations stay blocked. This is one approved command per
+  turn rather than a persistent interactive console. PowerShell keeps its
+  narrower single-cmdlet allowlist. Near-miss corrections cover tested action
+  words and do not rewrite dotted filenames. The desktop entry point now creates
+  and wires the always-on-top robot avatar; the drawing class alone was not
+  enough to make it visible in the running app.
 - File opens and selected-result feedback persist to `file_signals` and gently
   influence future ranking. Search vocabulary can be edited in the popover;
   SQLite persists aliases and expands them before retrieval.

@@ -773,6 +773,49 @@ class BotRuntime:
         except (OSError, RuntimeError, ValueError, PermissionError) as exc:
             return f"I couldn't create that file: {exc}"
 
+    def _stage_explicit_shell_command(self, prompt: str, *, shell: str) -> str | None:
+        """Stage a user-entered command directly; never start a shell in this path."""
+        command = self.router.command_text(prompt, shell=shell)
+        if command is None:
+            return None
+        roots = self.settings.get("index", {}).get("roots", [])
+        file_ops = FileOpsTool(self.db, roots=roots)
+        cwd = next(
+            (root.resolve(strict=True) for root in (file_ops.roots or []) if root.is_dir()),
+            Path.home(),
+        )
+        proposal_tool = (
+            ProposePowerShellTool(self.policy, self.db)
+            if shell == "powershell" else ProposeCmdTool(self.policy, self.db)
+        )
+        result = proposal_tool.propose(
+            command, "Command entered by the user in FileBot chat", str(cwd),
+        )
+        shell_name = "PowerShell" if shell == "powershell" else "CMD"
+        if result["status"] == "blocked":
+            return (
+                f"Blocked by FileBot's {shell_name} policy; nothing ran. "
+                "The command was recorded as blocked."
+            )
+        return (
+            f"Staged {shell_name} command for approval: {command}\n"
+            f"Nothing has run. Review the command and working folder below, then select Approve."
+        )
+
+    @staticmethod
+    def _shell_help(shell: str) -> str:
+        if shell == "powershell":
+            return (
+                "PowerShell requests go through this chat. Enter a single command as "
+                "`powershell: Get-Process`; FileBot shows it for approval before it runs."
+            )
+        return (
+            "CMD commands run through this chat, not in a separate interactive window. "
+            "Enter `cmd: dir` or `cmd: <your command>`; FileBot shows the exact command "
+            "and working folder for approval before it runs. Nothing runs automatically. "
+            "Use one command per message; chained commands and high-risk operations are blocked."
+        )
+
     def _stage_explicit_delete(self, prompt: str) -> str:
         """Stage one unambiguous exact file for a one-time confirmation token."""
         target = self.router.delete_target(prompt)
@@ -885,6 +928,16 @@ class BotRuntime:
             return self._confirm_explicit_delete(prompt)
         if intent == "cancel_delete":
             return self._cancel_explicit_delete(prompt)
+        if intent == "cmd_help":
+            return self._shell_help("cmd")
+        if intent == "cmd":
+            result = self._stage_explicit_shell_command(prompt, shell="cmd")
+            if result is not None:
+                return result
+        if intent == "powershell":
+            result = self._stage_explicit_shell_command(prompt, shell="powershell")
+            if result is not None:
+                return result
         if intent == "search":
             return self.search(prompt)
         if intent == "open_folder":
@@ -935,6 +988,16 @@ class BotRuntime:
             return self._confirm_explicit_delete(prompt)
         if intent == "cancel_delete":
             return self._cancel_explicit_delete(prompt)
+        if intent == "cmd_help":
+            return self._shell_help("cmd")
+        if intent == "cmd":
+            result = self._stage_explicit_shell_command(prompt, shell="cmd")
+            if result is not None:
+                return result
+        if intent == "powershell":
+            result = self._stage_explicit_shell_command(prompt, shell="powershell")
+            if result is not None:
+                return result
         if intent == "search":
             return self.search(prompt)
         if intent == "open_folder":

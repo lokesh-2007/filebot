@@ -1,4 +1,4 @@
-"""Default-deny command classification from config/cmd_policy.yaml."""
+"""Classify single CMD/PowerShell proposals from config/cmd_policy.yaml."""
 from __future__ import annotations
 
 import re
@@ -9,7 +9,7 @@ MAX_COMMAND_LENGTH = 4096
 
 
 class PolicyEngine:
-    """Classify full command strings; explicit blocks always take precedence."""
+    """Classify full commands; blocked patterns win and every runnable command needs approval."""
     def __init__(self, policy_path: str | Path) -> None:
         import yaml
         try:
@@ -30,6 +30,10 @@ class PolicyEngine:
             except re.error as exc:
                 raise RuntimeError(f"Command policy contains an invalid {key!r} regular expression: {exc}") from exc
         self.default = "blocked"
+        cmd_default = data.get("cmd_default", "blocked")
+        if cmd_default not in {"blocked", "gated"}:
+            raise RuntimeError("Command policy 'cmd_default' must be 'blocked' or 'gated'")
+        self.cmd_default = cmd_default
         self.patterns = patterns
         powershell = data.get("powershell", {})
         if not isinstance(powershell, dict):
@@ -62,4 +66,4 @@ class PolicyEngine:
         for level in ("read_only", "gated"):
             if any(pattern.fullmatch(value) for pattern in patterns[level]):
                 return level
-        return self.default
+        return self.cmd_default if shell == "cmd" else self.default

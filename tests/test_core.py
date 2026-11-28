@@ -942,6 +942,26 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual((allowed / "h2.txt").read_text(encoding="utf-8"), "")
         self.assertEqual((allowed / "h3.txt").read_text(encoding="utf-8"), "")
 
+    def test_cmd_prefix_stages_user_command_without_model_or_execution(self) -> None:
+        runtime = BotRuntime({"index": {"roots": [str(self.root)]}}, self.db, object())
+
+        with patch.object(runtime, "_prepare_prompt", side_effect=AssertionError("must not call model")):
+            help_text = runtime.ask("open cmd prom")
+            staged = runtime.ask("cmd: echo ready")
+            ps_staged = runtime.ask("powershell: Get-Process")
+
+        self.assertIn("not in a separate interactive window", help_text)
+        self.assertIn("cmd: dir", help_text)
+        self.assertIn("Nothing has run", staged)
+        self.assertIn("Nothing has run", ps_staged)
+        pending = self.db.pending_commands()
+        self.assertEqual(len(pending), 2)
+        self.assertEqual(pending[0]["command"], "echo ready")
+        self.assertEqual(pending[0]["shell"], "cmd")
+        self.assertEqual(pending[0]["status"], "pending")
+        self.assertEqual(pending[1]["command"], "Get-Process")
+        self.assertEqual(pending[1]["shell"], "powershell")
+
     def test_open_natural_folder_names_directly_inside_configured_roots(self) -> None:
         documents = self.root / "Documents"
         chatgpt = documents / "ChatGPT"
@@ -1181,11 +1201,14 @@ class PolicyAndParserTests(unittest.TestCase):
         self.assertEqual(policy.classify(r"mkdir %TEMP%\FileBot"), "blocked")
         self.assertEqual(policy.classify("whoami.exe"), "blocked")
         self.assertEqual(policy.classify("mkdir.exe new-folder"), "blocked")
-        self.assertEqual(policy.classify("unknown-command"), "blocked")
+        self.assertEqual(policy.classify("unknown-command"), "gated")
+        self.assertEqual(policy.classify("echo ready"), "gated")
+        self.assertEqual(policy.classify("del notes.txt"), "blocked")
 
     def test_policy_rejects_non_blocked_default_and_malformed_patterns(self) -> None:
         invalid_policies = (
             "version: 1\ndefault: read_only\nread_only: []\ngated: []\nblocked: []\n",
+            "version: 1\ndefault: blocked\ncmd_default: read_only\nread_only: []\ngated: []\nblocked: []\n",
             "version: 1\ndefault: blocked\nread_only: whoami\ngated: []\nblocked: []\n",
             "version: 1\ndefault: blocked\nread_only: ['[']\ngated: []\nblocked: []\n",
         )

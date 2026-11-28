@@ -1,10 +1,11 @@
-# Default-deny policy. Read-only and gated commands both require a visible
-# proposal and explicit approval in FileBot's UI before execution.
+# PowerShell remains default-deny. CMD accepts single commands only as visible
+# approval proposals; high-risk commands and shell composition stay blocked.
 version: 1
 default: blocked
+cmd_default: gated
 read_only:
   # Entries are case-insensitive regular expressions matched against the full
-  # command string. Keep this allowlist narrow.
+  # command string. These commands are still shown for explicit approval.
   - '^\s*dir(?:\s|$).*$'
   - '^\s*where\s+[^&|<>]+$'
   - '^\s*whoami(?:\s+[^&|<>]+)?\s*$'
@@ -18,14 +19,14 @@ gated:
   - '^\s*copy\s+.+$'
   - '^\s*move\s+.+$'
   - '^\s*ren(?:ame)?\s+.+$'
-  - '^\s*del(?:ete)?\s+.+$'
 blocked:
   # Explicit blocks take precedence over the allowlists. These patterns guard
   # shell chaining, variable expansion, installers, privilege changes and disk tools.
   - '[&|<>]'
-  - '[%!]'
-  - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip)\b'
-  - '^\s*(?:del|erase|rmdir|rd)\s+.*(?:/s|/q|/f)'
+  - '[%!^]'
+  - '\b(?:del|erase|rmdir|rd|rm)\b'
+  - '\b(?:format|diskpart|reg(?:\.exe)?\s+(?:add|delete|import)|shutdown|reboot|bcdedit|takeown|icacls|runas|powershell|pwsh|msiexec|winget|choco|scoop|pip|python\s+-m\s+pip|setx|net\s+(?:user|use|localgroup)|sc(?:\.exe)?|schtasks|mountvol|cipher|manage-bde|taskkill|tskill)\b'
+  - '\b(?:whoami|mkdir)\.exe\b'
 powershell:
   # Windows PowerShell 5.1 only. Every command still requires visible approval.
   # Keep to single cmdlets: no pipelines, chaining, redirection, expressions,
