@@ -1,9 +1,11 @@
 """Frameless always-on-top avatar that snaps to a screen corner."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import QPointF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QRadialGradient
 from PyQt6.QtWidgets import QLabel, QWidget
+
+STATE_COLORS = {"sleep": "#6a5de0", "active": "#34d399", "cmd_pending": "#f5a524"}
 
 
 class AvatarBubble(QWidget):
@@ -16,22 +18,55 @@ class AvatarBubble(QWidget):
         self.setAccessibleName("FileBot status avatar")
         self.setAccessibleDescription("Click to open FileBot local search and command approval.")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(58, 58)
+        self.setFixedSize(64, 64)
         self.label = QLabel("FB", self)
         self.label.setAccessibleName("FileBot status")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setGeometry(2, 2, 54, 54)
-        self.label.setStyleSheet("background:#4936a5;color:white;border:2px solid #b9acff;border-radius:27px;font-weight:700;font-size:16px")
+        self.label.setGeometry(0, 0, 64, 64)
+        self.label.setStyleSheet("background:transparent;color:white;border:0;font-weight:800;font-size:17px")
+        self._status = "sleep"
+        self._phase = 0.0
+        self._pulse = QTimer(self)
+        self._pulse.setInterval(60)
+        self._pulse.timeout.connect(self._tick)
         self.set_status("sleep")
         self._offset = None
         self._dragged = False
         self.move_to_corner()
 
     def set_status(self, value: str) -> None:
-        colors = {"sleep": "#4936a5", "active": "#15803d", "cmd_pending": "#b45309"}
-        color = colors.get(value, colors["sleep"])
-        self.label.setStyleSheet(f"background:{color};color:white;border:2px solid #d8d2ff;border-radius:27px;font-weight:700;font-size:16px")
+        self._status = value if value in STATE_COLORS else "sleep"
+        # Awake and waiting-for-approval states breathe; sleeping stays still.
+        if self._status == "sleep":
+            self._pulse.stop()
+            self._phase = 0.0
+        elif not self._pulse.isActive():
+            self._pulse.start()
         self.setToolTip(f"FileBot: {value.replace('_', ' ')}")
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 0.07) % 1.0
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt API)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ring = QColor(STATE_COLORS[self._status])
+        centre = QPointF(self.width() / 2, self.height() / 2)
+        if self._status != "sleep":
+            glow = ring
+            glow.setAlpha(int(70 * (1 - self._phase)))
+            radius = 23 + 9 * self._phase
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(glow)
+            painter.drawEllipse(centre, radius, radius)
+        gradient = QRadialGradient(QPointF(centre.x() - 8, centre.y() - 10), 40)
+        gradient.setColorAt(0, QColor("#8f82ff"))
+        gradient.setColorAt(1, QColor("#3d2fa0"))
+        painter.setBrush(gradient)
+        painter.setPen(QPen(QColor(STATE_COLORS[self._status]), 3))
+        painter.drawEllipse(centre, 24, 24)
 
     def show_popover(self, popover: QWidget) -> None:
         point = self.frameGeometry().topLeft()

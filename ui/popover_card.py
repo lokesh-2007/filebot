@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QVBoxLayout, QWidget)
+
+from ui.result_delegate import ROW_HEIGHT, ResultDelegate
+from ui.theme import PALETTE, STATUS_PILLS, stylesheet
 
 from executor.cmd_runner import CommandRunner
 from agent.tools.file_ops_tool import FileOpsTool
@@ -65,35 +69,83 @@ class PopoverCard(QWidget):
         roots = runtime_settings.get("index", {}).get("roots") if isinstance(runtime_settings, dict) else None
         self.file_ops = FileOpsTool(db, roots=roots)
         self.setWindowTitle("FileBot")
-        self.setFixedWidth(390)
-        self.setStyleSheet("QWidget{background:#171923;color:#f5f5f5;font:10pt 'Segoe UI'} QLineEdit,QTextEdit,QListWidget{background:#242736;border:1px solid #40445a;border-radius:7px;padding:7px} QPushButton{background:#5141a4;border:0;border-radius:6px;padding:6px 10px} QFrame{border:1px solid #45495e;border-radius:7px}")
-        layout = QVBoxLayout(self)
-        title = QLabel("FileBot  ·  local search")
-        title.setStyleSheet("font-weight:700;font-size:12pt")
-        layout.addWidget(title)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedWidth(440)
+        self.setStyleSheet(stylesheet())
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        panel = QFrame()
+        panel.setObjectName("panel")
+        outer.addWidget(panel)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        heading = QVBoxLayout()
+        heading.setSpacing(0)
+        title = QLabel("FileBot")
+        title.setObjectName("title")
+        subtitle = QLabel("Local file search · runs offline")
+        subtitle.setObjectName("subtitle")
+        heading.addWidget(title)
+        heading.addWidget(subtitle)
+        header.addLayout(heading)
+        header.addStretch(1)
+        self.status_pill = QLabel()
+        self.status_pill.setObjectName("pill")
+        header.addWidget(self.status_pill, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(header)
+        self._set_pill("active")
+
         self.input = QLineEdit()
         self.input.setPlaceholderText("Search files or ask a question…")
+        self.input.setClearButtonEnabled(True)
         self.input.returnPressed.connect(self.submit)
         self.input.textEdited.connect(lambda _text: self.activity.emit())
         layout.addWidget(self.input)
+
         row = QHBoxLayout()
-        self.search_button = QPushButton("Search")
+        self.search_button = QPushButton("Search files")
         self.search_button.clicked.connect(lambda: self.submit(force_search=True))
-        self.ask_button = QPushButton("Ask")
+        self.ask_button = QPushButton("Ask FileBot")
+        self.ask_button.setObjectName("primary")
         self.ask_button.clicked.connect(self.submit)
         row.addWidget(self.search_button)
         row.addWidget(self.ask_button)
         layout.addLayout(row)
+
+        self.results_label = QLabel("RESULTS")
+        self.results_label.setObjectName("section")
+        self.results_label.hide()
+        layout.addWidget(self.results_label)
         self.results = QListWidget()
-        self.results.setMaximumHeight(210)
+        self.results.setMouseTracking(True)
+        self.results.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.results_delegate = ResultDelegate(self.results)
+        self.results.setItemDelegate(self.results_delegate)
         self.results.itemActivated.connect(self.open_result)
+        self.results.itemClicked.connect(self.open_result)
+        self.results.hide()
         layout.addWidget(self.results)
+
         self.answer = QTextEdit()
         self.answer.setReadOnly(True)
-        self.answer.setMaximumHeight(110)
+        self.answer.setMinimumHeight(64)
+        self.answer.setMaximumHeight(104)
+        self.answer.setPlaceholderText("Answers and status appear here.")
         layout.addWidget(self.answer)
         self.pending = QVBoxLayout()
         layout.addLayout(self.pending)
+
+        footer = QHBoxLayout()
+        for text in ("100% local", "No cloud", "Approve before any command"):
+            chip = QLabel(text)
+            chip.setObjectName("chip")
+            footer.addWidget(chip)
+        footer.addStretch(1)
+        layout.addLayout(footer)
         self._task: _Task | None = None
         self._command_task: _CommandTask | None = None
         self._command_queue: list[str] = []
@@ -106,6 +158,11 @@ class PopoverCard(QWidget):
         if self.db.pending_commands():
             self.status_changed.emit("cmd_pending")
 
+    def _set_pill(self, state: str) -> None:
+        label, color = STATUS_PILLS.get(state, STATUS_PILLS["active"])
+        self.status_pill.setText(f"●  {label}")
+        self.status_pill.setStyleSheet(f"color:{color}")
+
     def submit(self, force_search: bool = False) -> None:
         if self._task is not None and self._task.isRunning():
             return
@@ -117,6 +174,7 @@ class PopoverCard(QWidget):
         self.search_button.setEnabled(False)
         self.ask_button.setEnabled(False)
         self.status_changed.emit("active")
+        self._set_pill("working")
         self.answer.setPlainText(
             "Searching indexed files…" if force_search
             else "Waiting for the local model… The first response can take up to a minute while it loads."
@@ -158,20 +216,26 @@ class PopoverCard(QWidget):
         self.input.setEnabled(True)
         self.search_button.setEnabled(True)
         self.ask_button.setEnabled(True)
+        self._set_pill("active")
         if error:
             self.answer.setPlainText(error)
             self.work_finished.emit()
             return
         if isinstance(result, list):
             self.results.clear()
+            self.results_delegate.terms = [t for t in re.findall(r"\w+", self.input.text()) if t]
             for match in result:
                 path = str(match.get("path", ""))
                 text = str(match.get("snippet", "")).replace("\n", " ")[:180]
                 item = QListWidgetItem(f"{path}\n{text}")
-                item.setSizeHint(QSize(0, 54))
+                item.setSizeHint(QSize(0, ROW_HEIGHT))
                 item.setToolTip(f"{path}\n\n{text}")
                 item.setData(Qt.ItemDataRole.UserRole, path)
                 self.results.addItem(item)
+            self.results.setFixedHeight(min(len(result), 3) * ROW_HEIGHT + 4)
+            self.results.setVisible(bool(result))
+            self.results_label.setText(f"RESULTS  ·  {len(result)}")
+            self.results_label.setVisible(bool(result))
             if not result:
                 self.answer.setPlainText("No matching files found in the current index.")
             else:
@@ -197,11 +261,15 @@ class PopoverCard(QWidget):
     def _refresh_pending(self) -> None:
         while self.pending.count():
             child = self.pending.takeAt(0)
-            if child.widget(): child.widget().deleteLater()
+            if child.widget():
+                child.widget().hide()
+                child.widget().deleteLater()
         rows = self.db.pending_commands()
         for row in rows:
             card = QFrame()
+            card.setObjectName("cmdcard")
             box = QVBoxLayout(card)
+            box.setContentsMargins(12, 10, 12, 10)
             details = QLabel(
                 f"Pending CMD · {row['risk_level']}\n"
                 f"Command: {row['command']}\n"
@@ -210,9 +278,16 @@ class PopoverCard(QWidget):
             )
             details.setTextFormat(Qt.TextFormat.PlainText)
             details.setWordWrap(True)
+            badge = QLabel("⚠  Approval required — nothing runs until you click Approve")
+            badge.setStyleSheet(f"color:{PALETTE['warn']};font-weight:600;font-size:8.5pt")
+            badge.setTextFormat(Qt.TextFormat.PlainText)
+            badge.setWordWrap(True)
             box.addWidget(details)
+            box.addWidget(badge)
             buttons = QHBoxLayout()
             approve, reject = QPushButton("Approve"), QPushButton("Reject")
+            approve.setObjectName("approve")
+            reject.setObjectName("reject")
             pid = str(row["proposal_id"])
             approve.clicked.connect(lambda _checked=False, key=pid: self._decide(key, True))
             reject.clicked.connect(lambda _checked=False, key=pid: self._decide(key, False))
@@ -222,8 +297,10 @@ class PopoverCard(QWidget):
             self.pending.addWidget(card)
         if rows:
             self.status_changed.emit("cmd_pending")
+            self._set_pill("cmd_pending")
         else:
             self.status_changed.emit("active")
+            self._set_pill("active")
 
     def _decide(self, proposal_id: str, approved: bool) -> None:
         self.activity.emit()

@@ -3,6 +3,12 @@
 Version numbers follow semantic versioning. This project is pre-1.0; minor
 versions may still change behavior while the Windows release is stabilized.
 
+## 1.0.0-rc2 (demo front end)
+- New popover design (`ui/theme.py`, `ui/result_delegate.py`): status pill, result cards with file-type badges and highlighted matches, approval card, trust chips; animated avatar with state ring.
+- Demo mode (`--demo`, `demo_support.py`): sample corpus, `LexicalEngine` (FTS5 only), `DemoServer` stand-in for `llama-server` (extractive answers, `dir`/`whoami`/`ipconfig` proposals through the real approval flow).
+- `scripts/demo_screens.py` renders UI states offscreen; `scripts/run_demo.ps1` launches the demo.
+- Verified on Linux: full test suite (new `tests/test_demo.py`), offscreen screenshots. Not verified: Windows hotkey, real model.
+
 ## 1.0.0-rc1 — 2026-11-27
 
 - Packaging: PyInstaller one-folder spec (`packaging/filebot.spec`), Inno Setup script

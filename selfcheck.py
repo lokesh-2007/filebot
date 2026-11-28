@@ -15,7 +15,8 @@ RUNTIME_MODULES = ("fastembed", "chromadb", "onnxruntime", "fitz", "docx", "watc
                    "pynput.keyboard", "PyQt6.QtWidgets",
                    # First-party modules imported lazily at wake time: proves the freeze kept them.
                    "agent.bot_runtime", "retrieval.hybrid_engine", "retrieval.index_worker",
-                   "retrieval.parsers", "executor.cmd_runner", "ui.popover_card")
+                   "retrieval.parsers", "retrieval.lexical_engine", "agent.demo_llm", "demo_support",
+                   "executor.cmd_runner", "ui.popover_card", "ui.result_delegate", "ui.theme")
 
 
 def _check(report: list[dict[str, Any]], name: str, action: Callable[[], str], *, required: bool = True) -> bool:

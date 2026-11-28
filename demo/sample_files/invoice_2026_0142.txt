@@ -1,0 +1,5 @@
+INVOICE 2026-0142
+Client: Greenleaf Bakery
+Service: Website redesign and online ordering page
+Amount due: 18,500 INR. Payment terms: 15 days from invoice date.
+Bank transfer reference: INV-0142. Thank you for your business.

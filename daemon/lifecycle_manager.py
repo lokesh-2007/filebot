@@ -24,11 +24,27 @@ class _WakeWorker(QThread):
     def run(self) -> None:
         engine = runtime = None
         try:
-            from retrieval.hybrid_engine import HybridEngine
             from agent.bot_runtime import BotRuntime
-            engine = HybridEngine(self.settings, self.db)
-            engine.activate()
-            runtime = BotRuntime(self.settings, self.db, engine)
+            if self.settings.get("runtime", {}).get("demo_mode"):
+                # Demo: FTS5-only retrieval and a model-free answerer; no downloads needed.
+                from agent.demo_llm import DemoServer
+                from agent.fast_router import FastRouter
+                from retrieval.lexical_engine import LexicalEngine
+
+                class _DemoRouter(FastRouter):
+                    def route(self, prompt: str) -> str:
+                        intent = super().route(prompt)
+                        return "search" if intent == "chat" else intent
+
+                engine = LexicalEngine(self.settings, self.db)
+                engine.activate()
+                runtime = BotRuntime(self.settings, self.db, engine, server=DemoServer())
+                runtime.router = _DemoRouter()
+            else:
+                from retrieval.hybrid_engine import HybridEngine
+                engine = HybridEngine(self.settings, self.db)
+                engine.activate()
+                runtime = BotRuntime(self.settings, self.db, engine)
             self.result = (engine, runtime)
             self.ready.emit(engine, runtime, "")
         except Exception as exc:

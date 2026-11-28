@@ -13,6 +13,7 @@ from daemon.lifecycle_manager import LifecycleManager
 from daemon.instance_guard import InstanceGuard
 from daemon.watcher import FileWatcher
 from filebot_config import expand_config_path, load_settings
+from demo_support import apply_demo, demo_requested
 from filebot_version import __version__
 from resources import app_root, user_config_dir, user_settings_path
 from storage.db import Database
@@ -49,6 +50,8 @@ def main() -> int:
     root = app_root()
     _ensure_user_settings_template()
     settings = load_settings(root / "config" / "settings.yaml", user_settings_path())
+    if demo_requested():
+        apply_demo(settings, root)
     db_path = expand_config_path(settings["app"]["database_path"])
     log_dir = db_path.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

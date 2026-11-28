@@ -1,9 +1,13 @@
-# FileBot 1.0.0-rc1
+# FileBot 1.0.0-rc2
 
 FileBot is a local Windows file search assistant with a small always-on avatar and an explicit approval step for gated CMD commands. The sleeping process keeps the PyQt UI, global hotkey, watchdog observer, and SQLite database available. Embeddings, ChromaDB, and the bundled local LLM engine (llama.cpp's `llama-server`) are loaded after wake and released on idle timeout.
 
 See [CHANGELOG.md](CHANGELOG.md) for versioned updates.
 See [AGENT.md](AGENT.md) for the architecture map, safety invariants, and development workflow.
+
+## Demo mode (no models needed)
+
+`python app.pyw --demo` (or `.\scripts\run_demo.ps1`) runs the real app on the bundled `demo/sample_files` with a separate database in `~/.filebot-demo`. Search is SQLite FTS5 only, and **Ask** answers by quoting the matching files, so no embedding model, GGUF or `llama-server.exe` is needed. CMD proposals still need an explicit Approve click. Your own files are never indexed in demo mode. `python scripts/demo_screens.py out/` renders every UI state to PNG without a display.
 
 ## Requirements
 

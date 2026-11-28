@@ -30,22 +30,12 @@ class _Base(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(dir=HERE)
-        self.addCleanup(self._cleanup_tmp)
+        self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
         self.db = Database(self.dir / "fb.sqlite3")
         self.db.initialize()
         self.model = self.dir / "model.gguf"
         self.model.write_text(self.mode, encoding="utf-8")
-
-    def _cleanup_tmp(self) -> None:
-        for attempt in range(5):
-            try:
-                self._tmp.cleanup()
-                return
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.1)
 
     def make_server(self, **kwargs) -> LlamaServer:
         server = LlamaServer(FAKE, self.model, startup_timeout=20,

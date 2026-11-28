@@ -9,15 +9,9 @@ if ($null -eq $pythonLauncher) {
 }
 
 $pythonVersion = $null
-foreach ($candidate in @("-3.11", "-3.12")) {
-    $candidateIsSupported = $false
-    try {
-        & $pythonLauncher.Source $candidate -c "import struct,sys; sys.exit(0 if sys.maxsize > 2**32 else 1)" *> $null
-        $candidateIsSupported = ($LASTEXITCODE -eq 0)
-    } catch {
-        $candidateIsSupported = $false
-    }
-    if ($candidateIsSupported) {
+foreach ($candidate in @("-3.12")) {
+    & $pythonLauncher.Source $candidate -c "import struct,sys; sys.exit(0 if sys.maxsize > 2**32 else 1)" *> $null
+    if ($LASTEXITCODE -eq 0) {
         $pythonVersion = $candidate
         break
     }

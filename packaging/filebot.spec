@@ -27,7 +27,7 @@ for package in ("fastembed", "chromadb", "onnxruntime", "tokenizers", "docx", "p
 # First-party modules are imported lazily at wake time, so static analysis misses them.
 for package in ("agent", "daemon", "executor", "retrieval", "storage", "ui"):
     hiddenimports += collect_submodules(package)
-hiddenimports += ["selfcheck", "resources", "filebot_config", "filebot_version"]
+hiddenimports += ["selfcheck", "resources", "filebot_config", "filebot_version", "demo_support"]
 
 # pynput picks its backend at runtime.
 if sys.platform == "win32":
